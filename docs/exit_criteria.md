@@ -48,7 +48,27 @@ promote 1→2 (test MAE 4.661 < 4.689, same month 2024-12), rollback 2→1.
 `champion.json.version: 1`. Commits `49fb1c0d` (v1 outputs) and `44c098eb`
 (v2 outputs). Tests: `tests/test_registry.py` (gate, refusals, round trip).
 
-**Pending.** The two `deploy.yml` run URLs and the two live `/health` bodies.
+**Proof (live, 2026-09-22).** The champion pointer drove three deployments of
+the *same* code to AWS Lambda, each verified against the running function:
+
+| step | champion.json | live `/health` `model_version` | deploy run |
+|---|---|---|---|
+| deployed v3 | 3 | `v3` (`status: ok`) | manual first deploy (`deploy/aws/lambda.sh`) |
+| rollback | 1 | `v1` | `deploy.yml` |
+| re-promote | 3 | `v3` | `deploy.yml` |
+
+Each `/health` body was obtained with `deploy_check.py --invoke
+nyc-taxi-trip-duration --expect-version vN`, which also re-checked the fixture
+prediction against the offline value (`62.30` for v1, `66.75` for v3 — they
+differ, so the *model* really changed, not just the label) and the nine
+malformed cases. `docs/promotions.md` holds the matching rows.
+
+An intermediate deployment came up **degraded** because `champion_meta.json`
+had been corrupted by a test: `/health` reported
+`{"status":"degraded","model_version":"fallback-v1","load_error":"feature
+list mismatch…"}` and the service kept answering from the lookup table. That
+is criterion 2's real value — the pointer, the artefacts and the running
+service disagreed, and the system said so instead of serving a wrong model.
 ## 3. CI blocks a broken build — MET
 
 **Branch protection on `main`** (set 2026-09-22 via `gh api`): required status
@@ -63,8 +83,15 @@ policy prohibits the merge"*, `mergeStateStatus: BLOCKED`. The fix commit on
 the same PR turned CI green and the PR mergeable. Rehearsal without
 protection: PR #1 (runs 35686689059 red → 35686734906 green).
 
-## 4. Cost is known — pending: `docs/cost.md` holds the plan and list prices; the Cost Explorer number needs an account and a month of running
-## 5. Malformed input never 500s and is logged — MET locally; live pending (Phase 7)
+## 4. Cost is known — partial
+
+`docs/cost.md` is live: every resource exists and is tagged
+`project=nyc-taxi-trip-duration`, with **measured** quantities (S3 917 MB /
+24 objects, ECR image 206 MB, Lambda 3008 MB, ~16 ms warm, ~24 s cold init)
+priced at list. The Lambda-vs-Fargate comparison uses those measurements.
+What is still missing is a Cost Explorer figure for a **full month** — the
+account was created today, so the first real invoice line arrives in October.
+## 5. Malformed input never 500s and is logged — MET (live)
 
 **Proof (local).** `tests/test_api.py`: 11 parametrised malformed bodies
 (missing field, wrong type, zone 999, 264, 265, 0, bad time, time before and
@@ -73,9 +100,15 @@ field-level message; non-JSON / empty body → 422; hypothesis fuzz of 150
 random and near-valid bodies → never 500. `test_request_log_line_has_required_fields`
 asserts one JSON `request` line per call with `ts, level, logger, msg,
 request_id, model_version, method, path, status, latency_ms, model_kind`,
-and a WARNING `validation_error` line per rejected request. Container run
-2026-09-22 (image `tripduration:champion`): zone 264 → 422, `garbage` body →
-422, both logged as WARNING; see PR #10.
+and a WARNING `validation_error` line per rejected request. **Live proof (2026-09-22).** `deploy_check.py --invoke nyc-taxi-trip-duration
+--malformed` against the deployed function: all nine cases (missing field,
+wrong type, zone 999, zone 264, time out of window, extra field, empty body,
+non-JSON body, empty object) returned **422** with a `request_id` and a
+field-level message, e.g.
+`{"request_id":"21b90accb6c2487f","errors":[{"field":"pickup_zone_id","message":"Input should be less than or equal to 263"}]}`.
+CloudWatch Logs Insights over the same window shows the matching
+`validation_error` WARNING lines and one `request` line per call with
+`status: 422`.
 ## 6. Scheduled retraining has run — cycle proven locally; Actions run pending
 
 The exact steps of `retrain.yml` ran by hand on 2026-09-22 for 2025-01:
@@ -93,5 +126,17 @@ ran on 2026-09-22: `/health` reported `"model_version": "v1"` after
 `fetch_champion.py` pulled v1's artefacts by md5 from the DVC remote at commit
 `49fb1c0d`, while the working tree held v2's model (which the md5 check
 correctly reported as `unregistered:…`).
-## 8. Structured logging verified in CloudWatch — pending; verified locally in the container and in CI (`docker logs`, one JSON `request` line per call with the §10 fields)
+## 8. Structured logging verified in CloudWatch — MET
+
+Logs Insights over `/aws/lambda/nyc-taxi-trip-duration` (2026-09-22):
+
+```
+{"@timestamp":"2026-09-22 12:21:52.766","event":"request","level":"INFO","status":"200","path":"/predict","latency_ms":"16.49","model_kind":"model","request_id":"af60e68eaf6d49a4"}
+{"@timestamp":"2026-09-22 12:21:48.083","event":"validation_error","level":"WARNING","path":"/predict","request_id":"5d0735f59cf845bf"}
+{"@timestamp":"2026-09-22 12:21:48.083","event":"request","level":"INFO","status":"422","path":"/predict","latency_ms":"1.02","request_id":"5d0735f59cf845bf"}
+```
+
+One JSON line per request with every field from §10, WARNING lines carrying
+the same `request_id`, 32 records matched in the query window. Queries are in
+`docs/monitoring.md`.
 ## 9. Owner can explain and rebuild every core file — owner's checkpoint
