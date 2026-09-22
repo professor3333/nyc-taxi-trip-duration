@@ -1,0 +1,63 @@
+{
+  "added_null": [
+    "cbd_congestion_fee"
+  ],
+  "columns_seen": [
+    "VendorID",
+    "tpep_pickup_datetime",
+    "tpep_dropoff_datetime",
+    "passenger_count",
+    "trip_distance",
+    "RatecodeID",
+    "store_and_fwd_flag",
+    "PULocationID",
+    "DOLocationID",
+    "payment_type",
+    "fare_amount",
+    "extra",
+    "mta_tax",
+    "tip_amount",
+    "tolls_amount",
+    "improvement_surcharge",
+    "total_amount",
+    "congestion_surcharge",
+    "Airport_fee"
+  ],
+  "ingested_at": "2026-09-22T04:45:18+00:00",
+  "month": "2024-10",
+  "output_md5": "9ad539985920393e9f9e56848db22f97",
+  "output_path": "data/raw/yellow/2024-10.parquet",
+  "pyarrow_version": "25.0.1",
+  "renamed": {
+    "Airport_fee": "airport_fee",
+    "DOLocationID": "do_location_id",
+    "PULocationID": "pu_location_id",
+    "RatecodeID": "ratecode_id",
+    "VendorID": "vendor_id"
+  },
+  "rows": 3833771,
+  "service": "yellow",
+  "source_md5": "48ac6ac4425187d7d661a716e7138479",
+  "source_schema": {
+    "Airport_fee": "double",
+    "DOLocationID": "int32",
+    "PULocationID": "int32",
+    "RatecodeID": "int64",
+    "VendorID": "int32",
+    "congestion_surcharge": "double",
+    "extra": "double",
+    "fare_amount": "double",
+    "improvement_surcharge": "double",
+    "mta_tax": "double",
+    "passenger_count": "int64",
+    "payment_type": "int64",
+    "store_and_fwd_flag": "large_string",
+    "tip_amount": "double",
+    "tolls_amount": "double",
+    "total_amount": "double",
+    "tpep_dropoff_datetime": "timestamp[us]",
+    "tpep_pickup_datetime": "timestamp[us]",
+    "trip_distance": "double"
+  },
+  "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-10.parquet"
+}
