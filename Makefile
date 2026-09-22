@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke compose-up compose-down mlflow-ui
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -31,6 +31,9 @@ pipeline:     ## Run every DVC stage whose inputs changed (validate -> prepare -
 
 pipeline-smoke: ## Whole pipeline on tests/fixtures in a temp dir with SQLite MLflow (what CI runs)
 	uv run pytest tests/test_pipeline.py -q
+
+reproduce:    ## Exit criterion 1: fresh clone -> dvc pull -> dvc repro -> metrics identical
+	scripts/reproduce.sh
 
 compose-up:   ## Start MLflow tracking server + Postgres (http://localhost:5001)
 	docker compose up -d --build --wait
