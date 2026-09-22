@@ -29,11 +29,22 @@ fi
 if ! aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
   aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" \
     --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
-  if [ "$LAMBDA_URL_AUTH_TYPE" = "NONE" ]; then
-    aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url \
-      --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE >/dev/null
-  fi
   log "created Function URL (auth $LAMBDA_URL_AUTH_TYPE)"
+fi
+
+# Who may invoke the URL. With AWS_IAM, a same-account *role* still needs a
+# resource-policy statement (only the account root bypasses it), so the
+# GitHub Actions role is granted here; deploy.yml and monitor.yml sign with
+# SigV4 as that role.
+if [ "$LAMBDA_URL_AUTH_TYPE" = "NONE" ]; then
+  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url \
+    --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE \
+    >/dev/null 2>&1 || true
+else
+  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" \
+    --statement-id github-actions-url --action lambda:InvokeFunctionUrl \
+    --principal "arn:aws:iam::${ACCOUNT_ID}:role/${GH_OIDC_ROLE_NAME}" \
+    --function-url-auth-type AWS_IAM >/dev/null 2>&1 || true
 fi
 FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --query FunctionUrl --output text)
 
