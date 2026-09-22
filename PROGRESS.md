@@ -117,3 +117,11 @@ Tick a line only when its proof command passes, not when the code is written.
 - CI steps named for what they prove, consistency check ordered before the broad suite: lint -> training/inference feature consistency -> data-transformation and API tests -> fixture training -> docker build -> container smoke. No step touches full data or AWS.
 - `docs/release.md`: what each step proves, how the registry version is resolved into the image (promote -> champion.json in git -> fetch by content hash -> baked), immutability, and the gate.
 - Gate proved three ways (PR #12, PR #32 x2): broken Dockerfile, a wrong feature in the shared module, and an API-only transform. All red, all BLOCKED, none deployed. Notable: the shared-module break did *not* fail the parity check - parity catches divergence, unit tests catch wrongness.
+
+## Scheduled retraining and recovery milestone — 2026-09-22
+
+- `retrain.yml`: **weekly** (Mondays 09:00 UTC) instead of monthly; `concurrency: retrain` with `cancel-in-progress: false` so runs queue rather than race or be dropped; a no-new-data week exits green before validating anything and says so in the job summary.
+- `scripts/gate_candidate.py`: the candidate-vs-champion decision is now automated and recorded (`reports/monitoring/gate-<month>.json`), comparing on the **same** evaluation month via the champion's prospective score. The PR is labelled `candidate-passed` / `candidate-failed`. Registering and promoting stay human because the registry is local (ADR-0004/0010).
+- Monitoring extended from 2 metrics to 6: `ErrorCount`, `FallbackCount`, `InvalidRequestCount`, `RequestCount`, `LatencyMs` (p95 alarm), `PredictionMin` (p50 alarm) - the last gives prediction-distribution monitoring on live traffic. `/predict` now logs the value it returned.
+- `docs/recovery.md`: all five demonstrations with commands, observed output and the test that keeps each true. `docs/monitoring.md` states plainly that evaluation error on live traffic is not measurable (no outcomes for arbitrary requests) and that historical replay is the substitute.
+- 124 tests (5 new for the gate).

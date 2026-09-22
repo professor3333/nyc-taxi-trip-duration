@@ -171,6 +171,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             [body.pickup_zone_id], [body.dropoff_zone_id], [body.departure_time]
         )
         request.state.model_kind = p.kind
+        # Carried into the request log line so the *distribution* of what the
+        # service predicts is observable, not just its error rate.
+        request.state.prediction = round(float(pred[0]), 2)
         return PredictResponse(
             duration_min=round(float(pred[0]), 2),
             model_version=p.model_version,

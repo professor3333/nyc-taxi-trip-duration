@@ -24,15 +24,43 @@ lighter than December's; the direction of the bias is the regime change.
 `train_month_count` is shown because the first cycles differ in data volume
 as well as period (ADR-0003).
 
+## What live traffic can and cannot tell us
+
+Public TLC data provides no outcome for an arbitrary request made to this API:
+nobody reports back how long the trip actually took. So **evaluation error on
+live traffic is not measurable**, and this project does not pretend otherwise.
+Two separate things are monitored instead:
+
+- **Prediction distribution**, from live logs. Every `/predict` logs the value
+  it returned (`prediction_min`), so the `PredictionMin` metric gives p50/p90
+  of what the service predicts, without labels. A sustained shift means the
+  inputs or the model changed even when nothing errors.
+- **Evaluation error**, by historical replay. When TLC publishes a month,
+  `retrain.yml` scores the current champion on it — a month it never trained,
+  validated or tested on — which is a genuine out-of-sample measurement with
+  real labels, just delayed by TLC's ~2-month publication lag.
+
+Collecting real outcomes for real requests (log the request, wait for the
+trip, join the result) would be a separate feature.
+
 ## Service health
 
 - **`monitor.yml`** daily: `deploy_check.py --expect-version v<champion.json>`
   against the Function URL; failure opens/updates one `service-health` issue,
   recovery closes it.
-- **CloudWatch** (created by `deploy/aws/lambda.sh`): metric filters on the
-  JSON logs — `ErrorCount` (`level = ERROR`) and `FallbackCount`
-  (`model_kind = fallback` on `request` events) — each with an alarm at ≥ 1 in
-  5 minutes → SNS email. Log retention 14 days.
+- **CloudWatch** (created by `deploy/aws/lambda.sh`), namespace
+  `nyc-taxi-trip-duration`, log retention 14 days:
+
+  | metric | pattern | alarm |
+  |---|---|---|
+  | `ErrorCount` | `level = ERROR` | ≥ 1 in 5 min |
+  | `FallbackCount` | `model_kind = fallback` on a request | ≥ 1 in 5 min |
+  | `InvalidRequestCount` | `event = validation_error` | > 50 in 5 min |
+  | `RequestCount` | every request line | — (denominator for rates) |
+  | `LatencyMs` | `$.latency_ms` | p95 > 2000 ms for 10 min |
+  | `PredictionMin` | `$.prediction_min` | p50 > 40 min for 3 h |
+
+  All five alarms notify the `nyc-taxi-trip-duration-alerts` SNS topic.
 
 ### Logs Insights queries (saved here; run in the Lambda log group)
 

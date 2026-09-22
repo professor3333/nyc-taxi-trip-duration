@@ -1,18 +1,31 @@
 name: retrain
 
-# Monthly: ingest the next month if TLC has published it, re-run the pipeline
-# with the ADR-0003 window, evaluate the current champion prospectively on the
-# new month, and open a candidate PR. Registering and promoting stay human
-# (ADR-0010). Opens a `model-drift` issue if ADR-0011's threshold is crossed.
+# Weekly: check whether TLC has published the next month. If not, exit green
+# without validating or training anything. If it has: ingest, re-run the
+# pipeline with the ADR-0003 window, evaluate the current champion
+# prospectively on that same month (historical replay - see docs/monitoring.md),
+# apply ADR-0007's gate to the candidate, and open a labelled candidate PR.
+# Registering and promoting stay human because the registry is local
+# (ADR-0004, ADR-0010). A `model-drift` issue opens if ADR-0011 is crossed.
 
 on:
   schedule:
-    - cron: "0 9 5 * *"   # 5th of each month, 09:00 UTC
+    # TLC publishes monthly with roughly a two-month lag, but not on a fixed
+    # day. Checking weekly finds a new month within days; a week with nothing
+    # new costs one HEAD request and exits green.
+    - cron: "0 9 * * 1"   # Mondays, 09:00 UTC
   workflow_dispatch:
     inputs:
       month:
         description: "YYYY-MM to ingest (default: the month after the newest under data/raw/yellow)"
         required: false
+
+# One retrain at a time. Two runs would race on the same branch, the same DVC
+# remote and the same dvc.lock. Queued rather than cancelled, so a genuinely
+# new month is never dropped.
+concurrency:
+  group: retrain
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -54,9 +67,12 @@ jobs:
           make ingest MONTH=${{ steps.month.outputs.month }}
           if [ -f data/raw/yellow/${{ steps.month.outputs.month }}.parquet ]; then echo "new=true" >> "$GITHUB_OUTPUT"; else echo "new=false" >> "$GITHUB_OUTPUT"; fi
 
-      - name: Nothing to do
+      - name: No new data - skip retraining
         if: steps.ingest.outputs.new == 'false'
-        run: echo "TLC has not published ${{ steps.month.outputs.month }} yet"
+        run: |
+          M=${{ steps.month.outputs.month }}
+          echo "TLC has not published $M yet; nothing validated, trained or registered."
+          printf '### No new data\n`%s` is not published yet. Next check: Monday 09:00 UTC.\n' "$M" >> "$GITHUB_STEP_SUMMARY"
 
       - name: dvc pull, add, repro, push
         if: steps.ingest.outputs.new == 'true'
@@ -73,6 +89,14 @@ jobs:
           uv run python scripts/fetch_champion.py
           uv run python scripts/prospective_eval.py --month ${{ steps.month.outputs.month }} | tee prospective.txt
           echo "verdict=$(jq -r .verdict reports/monitoring/${{ steps.month.outputs.month }}.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Gate the candidate against the champion on the same month
+        if: steps.ingest.outputs.new == 'true'
+        id: gate
+        run: |
+          uv run python scripts/gate_candidate.py --month ${{ steps.month.outputs.month }} | tee gate.txt
+          V=$(jq -r .verdict reports/monitoring/gate-${{ steps.month.outputs.month }}.json)
+          echo "verdict=$V" >> "$GITHUB_OUTPUT"
 
       - name: Open candidate PR
         if: steps.ingest.outputs.new == 'true'
@@ -92,10 +116,15 @@ jobs:
             echo; echo "### Candidate vs fallback"; echo
             echo '```'; jq '{val: {model: .val.model.mae, fallback: .val.fallback.mae}, test: {month: .test.month, model: .test.model.mae, fallback: .test.fallback.mae}}' metrics/eval.json; echo '```'
             echo "### Champion prospective on $M"; echo; echo '```'; cat prospective.txt; echo '```'
+            echo "### Gate verdict (ADR-0007)"; echo; echo '```'; cat gate.txt; echo '```'
             echo "### dvc metrics diff main"; echo; echo '```'; uv run dvc metrics diff main --md || true; echo '```'
             echo; echo "Register and promote are owner actions: \`make register\`, \`make promote VERSION=<n> REASON=...\` (ADR-0010)."
           } > body.md
-          gh pr create --title "Retrain candidate $M" --body-file body.md --label retrain || gh pr create --title "Retrain candidate $M" --body-file body.md
+          LABELS="retrain,candidate-${{ steps.gate.outputs.verdict }}ed"
+          gh pr create --title "Retrain candidate $M (gate: ${{ steps.gate.outputs.verdict }})" \
+            --body-file body.md --label "$LABELS" \
+            || gh pr create --title "Retrain candidate $M" --body-file body.md
+          { echo "### Candidate $M: ${{ steps.gate.outputs.verdict }}"; cat gate.txt; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open model-drift issue
         if: steps.ingest.outputs.new == 'true' && steps.prospective.outputs.verdict == 'degraded'

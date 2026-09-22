@@ -51,16 +51,53 @@ FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCT
 aws logs create-log-group --log-group-name "$LOG_GROUP" --tags "$TAG_JSON" 2>/dev/null || true
 aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days "$LOG_RETENTION_DAYS"
 
-# Alarms: ERROR lines and fallback-mode requests, via metric filters on the JSON logs
+# --- monitoring -------------------------------------------------------------
+# Service behaviour: errors, fallback frequency, invalid requests, latency.
+# Model behaviour on live traffic: the distribution of what is predicted.
+# (Evaluation error needs labels, which live requests never have - that is
+# the monthly historical replay in retrain.yml. See docs/monitoring.md.)
 TOPIC_ARN=$(aws sns create-topic --name "${PROJECT}-alerts" --tags "$TAGS" --query TopicArn --output text)
 aws sns subscribe --topic-arn "$TOPIC_ARN" --protocol email --notification-endpoint "$BUDGET_EMAIL" >/dev/null
-for spec in "ErrorCount:{ \$.level = \"ERROR\" }" "FallbackCount:{ \$.model_kind = \"fallback\" && \$.event = \"request\" }"; do
-  NAME="${spec%%:*}"; PATTERN="${spec#*:}"
-  aws logs put-metric-filter --log-group-name "$LOG_GROUP" --filter-name "$NAME" --filter-pattern "$PATTERN" \
-    --metric-transformations metricName="$NAME",metricNamespace="$PROJECT",metricValue=1,defaultValue=0
-  aws cloudwatch put-metric-alarm --alarm-name "${PROJECT}-${NAME}" --namespace "$PROJECT" --metric-name "$NAME" \
-    --statistic Sum --period 300 --evaluation-periods 1 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold \
-    --treat-missing-data notBreaching --alarm-actions "$TOPIC_ARN" --tags "$TAGS"
+
+# name:pattern:value  (value "1" counts events; $.field emits the field)
+FILTERS=(
+  "ErrorCount:{ \$.level = \"ERROR\" }:1"
+  "FallbackCount:{ \$.model_kind = \"fallback\" && \$.event = \"request\" }:1"
+  "InvalidRequestCount:{ \$.event = \"validation_error\" }:1"
+  "RequestCount:{ \$.event = \"request\" }:1"
+  "LatencyMs:{ \$.event = \"request\" && \$.latency_ms > 0 }:\$.latency_ms"
+  "PredictionMin:{ \$.event = \"request\" && \$.prediction_min > 0 }:\$.prediction_min"
+)
+for spec in "${FILTERS[@]}"; do
+  NAME="${spec%%:*}"; REST="${spec#*:}"; PATTERN="${REST%:*}"; VALUE="${REST##*:}"
+  aws logs put-metric-filter --log-group-name "$LOG_GROUP" --filter-name "$NAME" \
+    --filter-pattern "$PATTERN" \
+    --metric-transformations metricName="$NAME",metricNamespace="$PROJECT",metricValue="$VALUE",defaultValue=0
 done
+
+# Alarms. ERROR and fallback are binary: one occurrence is worth an email.
+for NAME in ErrorCount FallbackCount; do
+  aws cloudwatch put-metric-alarm --alarm-name "${PROJECT}-${NAME}" --namespace "$PROJECT" \
+    --metric-name "$NAME" --statistic Sum --period 300 --evaluation-periods 1 --threshold 1 \
+    --comparison-operator GreaterThanOrEqualToThreshold --treat-missing-data notBreaching \
+    --alarm-actions "$TOPIC_ARN" --tags "$TAGS"
+done
+# Latency: p95 over 5 minutes. 2000 ms is well above the observed ~16 ms
+# warm and below the 60 s timeout, so it fires on a real regression.
+aws cloudwatch put-metric-alarm --alarm-name "${PROJECT}-LatencyP95" --namespace "$PROJECT" \
+  --metric-name LatencyMs --extended-statistic p95 --period 300 --evaluation-periods 2 \
+  --threshold 2000 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching \
+  --alarm-actions "$TOPIC_ARN" --tags "$TAGS"
+# Invalid requests: a handful is normal, a flood means a broken caller.
+aws cloudwatch put-metric-alarm --alarm-name "${PROJECT}-InvalidRequests" --namespace "$PROJECT" \
+  --metric-name InvalidRequestCount --statistic Sum --period 300 --evaluation-periods 1 \
+  --threshold 50 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching \
+  --alarm-actions "$TOPIC_ARN" --tags "$TAGS"
+# Prediction distribution: the median of what we predict. A sustained shift
+# means the inputs or the model changed even when no error is raised.
+aws cloudwatch put-metric-alarm --alarm-name "${PROJECT}-PredictionMedianHigh" --namespace "$PROJECT" \
+  --metric-name PredictionMin --extended-statistic p50 --period 3600 --evaluation-periods 3 \
+  --threshold 40 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching \
+  --alarm-actions "$TOPIC_ARN" --tags "$TAGS"
 log "log group $LOG_GROUP (${LOG_RETENTION_DAYS}d), alarms ErrorCount and FallbackCount -> $TOPIC_ARN"
 echo "FUNCTION_URL=$FUNCTION_URL"
