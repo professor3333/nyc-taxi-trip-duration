@@ -1,11 +1,12 @@
 {
+  "bytes": 12331,
   "columns": [
     "LocationID",
     "Borough",
     "Zone",
     "service_zone"
   ],
-  "ingested_at": "2026-09-22T04:45:18+00:00",
+  "ingested_at": "2026-09-22T05:02:41+00:00",
   "md5": "c6064b7c144c716450641f769659d178",
   "rows": 265,
   "source_url": "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"

@@ -1,7 +1,12 @@
 {
-  "added_null": [
-    "cbd_congestion_fee"
-  ],
+  "bytes": 64346071,
+  "canonical_map": {
+    "Airport_fee": "airport_fee",
+    "DOLocationID": "do_location_id",
+    "PULocationID": "pu_location_id",
+    "RatecodeID": "ratecode_id",
+    "VendorID": "vendor_id"
+  },
   "columns_seen": [
     "VendorID",
     "tpep_pickup_datetime",
@@ -23,18 +28,14 @@
     "congestion_surcharge",
     "Airport_fee"
   ],
-  "ingested_at": "2026-09-22T04:45:18+00:00",
+  "etag": "9fd448f7f073698d04344137417ce731-4",
+  "ingested_at": "2026-09-22T05:02:40+00:00",
+  "missing_optional": [
+    "cbd_congestion_fee"
+  ],
   "month": "2024-10",
-  "output_md5": "9ad539985920393e9f9e56848db22f97",
-  "output_path": "data/raw/yellow/2024-10.parquet",
+  "path": "data/raw/yellow/2024-10.parquet",
   "pyarrow_version": "25.0.1",
-  "renamed": {
-    "Airport_fee": "airport_fee",
-    "DOLocationID": "do_location_id",
-    "PULocationID": "pu_location_id",
-    "RatecodeID": "ratecode_id",
-    "VendorID": "vendor_id"
-  },
   "rows": 3833771,
   "service": "yellow",
   "source_md5": "48ac6ac4425187d7d661a716e7138479",
