@@ -93,7 +93,9 @@ check `ci` (strict), enforce for admins, linear history, no force-push or
 deletion. A direct `git push` to `main` was rejected:
 `GH006: Protected branch update failed … protected branch hook declined`.
 
-**Proof:** PR #12 (https://github.com/professor3333/nyc-taxi-trip-duration/pull/12)
+**Proof (extended 2026-09-22):** three breaks, three blocks, zero deploys —
+the table in `docs/release.md`. Originally PR #12
+(https://github.com/professor3333/nyc-taxi-trip-duration/pull/12)
 — a deliberate `Dockerfile` error (`COPY src ./srcc`): CI run 35694641243
 **failure** at *Container smoke*; `gh pr merge` refused with *"the base branch
 policy prohibits the merge"*, `mergeStateStatus: BLOCKED`. The fix commit on
