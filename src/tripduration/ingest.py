@@ -65,8 +65,17 @@ Sleeper = Callable[[float], None]
 _default_opener: Opener = functools.partial(urllib.request.urlopen, timeout=TIMEOUT_S)
 
 
+# TLC's CloudFront distribution sits in front of S3 without s3:ListBucket, so
+# a key that does not exist comes back as 403, not 404 — verified against
+# 2026-08, 2099-01 and a nonsense path, all 403, while 2025-03 is 200. There
+# is no authentication on these URLs, so a 403 cannot mean "not allowed"; it
+# means "not there". Treating only 404 as unpublished made the weekly check
+# fail every Monday until a month appeared.
+NOT_PUBLISHED_CODES = frozenset({403, 404})
+
+
 class MonthNotPublishedError(Exception):
-    """The source URL returned 404: TLC has not published this month yet."""
+    """TLC has not published this month yet (403 or 404 from CloudFront)."""
 
 
 class SchemaDriftError(ValueError):
@@ -137,6 +146,8 @@ def load_schema(path: Path) -> RawSchema:
 
 def _is_transient(exc: BaseException) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in NOT_PUBLISHED_CODES:
+            return False
         return exc.code == 429 or exc.code >= 500
     return isinstance(
         exc,
@@ -165,8 +176,8 @@ def _with_retries(
         try:
             return fn()
         except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise MonthNotPublishedError(e.url) from e
+            if e.code in NOT_PUBLISHED_CODES:
+                raise MonthNotPublishedError(f"HTTP {e.code} at {e.url}") from e
             if not _is_transient(e) or attempt == retries:
                 raise
             err: BaseException = e
@@ -522,5 +533,5 @@ def main(
                 sleep=sleep,
             )
         except MonthNotPublishedError as e:
-            log.info("month %s not published yet (404 at %s); nothing to do", month, e)
+            log.info("month %s not published yet (%s); nothing to do", month, e)
     return 0
