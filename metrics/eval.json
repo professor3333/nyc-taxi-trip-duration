@@ -1,5 +1,10 @@
 {
-  "git_sha": "48660586ffcd17705b840c7930046f8484c5638f",
+  "fixture_predictions": {
+    "file": "reports/eval/fixture_predictions.csv",
+    "model_min_sum": 2089.294992,
+    "rows": 80
+  },
+  "git_sha": "89da81bf6eddd511254b2ac61dc378a60ebc9d00",
   "model_beats_fallback_on_test": true,
   "params_hash": "2ea9cd9afc1ea1ae",
   "test": {

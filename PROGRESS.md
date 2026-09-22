@@ -84,3 +84,11 @@ Tick a line only when its proof command passes, not when the code is written.
 - Eight acceptance rules in `params.yaml › quality`; any failure exits 1 and blocks `prepare`/`train`.
 - Proof (`docs/data_quality.md`): 2024-11 truncated → blocked by `quality`; unknown column → blocked by `validate` naming the column; unreadable bytes → blocked by `validate`. Month restored, md5 verified.
 - 116 tests (11 new).
+
+## Reproducible-training milestone — 2026-09-22
+
+- `make reproduce` now re-executes every stage (`dvc repro --force --no-run-cache`) and compares **predictions** first: `reports/eval/fixture_predictions.csv`, 80 rows (8 routes x 5 hours x 2 days), tolerance 1e-9 min. Measured difference 0.000e+00 on commit ab70bd93; 4 m 46 s incl. a 139.7 s fit on 7.2M rows.
+- Caught: without `--force --no-run-cache` the same command finished in 1.1 s from DVC's run cache and reported success - restoring a cached model, not reproducing training.
+- `model_meta.json` now records the environment (platform, machine, uv.lock md5, sklearn/pandas/pyarrow/numpy versions, OMP/BLAS thread vars, container id when set), `data_versions` (md5 of every dvc.lock dep and out), `dvc_lock_md5` and explicit `split_boundaries`. MLflow tags carry the same.
+- `evaluate` adds per-route MAE (25 busiest zone pairs) alongside per-hour and per-borough-pair.
+- `docs/reproducibility.md`: what is recorded, the declared tolerance and why, prerequisites, and the transcript.

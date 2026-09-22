@@ -146,8 +146,8 @@ stages:
       size: 4430
     - path: src/tripduration/train.py
       hash: md5
-      md5: 18e3308ccf62181a3902021f1a0afa8d
-      size: 7408
+      md5: a607743f9899e601ad2c12bdef4520dc
+      size: 10003
     params:
       params.yaml:
         fallback:
@@ -182,8 +182,8 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: 4cb4e2dc0c676ca77c1c53610d6d0b78
-      size: 1129
+      md5: a9d65bda01aee485d8fee0440feef534
+      size: 5755
   evaluate:
     cmd: uv run python -m tripduration.evaluate
     deps:
@@ -213,12 +213,12 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: 4cb4e2dc0c676ca77c1c53610d6d0b78
-      size: 1129
+      md5: a9d65bda01aee485d8fee0440feef534
+      size: 5755
     - path: src/tripduration/evaluate.py
       hash: md5
-      md5: bf3870c2841ed163c6ee0a68b56e75e5
-      size: 5894
+      md5: 3454d0a060af18af043581dccd169cd6
+      size: 8429
     - path: src/tripduration/fallback.py
       hash: md5
       md5: e351f4498784283c84c10d0a1f87f96e
@@ -230,13 +230,13 @@ stages:
     outs:
     - path: metrics/eval.json
       hash: md5
-      md5: e81382962246e7154f4fc093c2a1381e
-      size: 1511
+      md5: f888eff923c3fd5227c9e570c1b282aa
+      size: 1644
     - path: reports/eval
       hash: md5
-      md5: 8a14590cce837b8b812b5dae91b183bc.dir
-      size: 8211
-      nfiles: 4
+      md5: b427003493772495b60fea7196a122f0.dir
+      size: 16211
+      nfiles: 7
   quality:
     cmd: uv run python -m tripduration.quality
     deps:

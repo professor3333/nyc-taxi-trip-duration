@@ -8,34 +8,42 @@ Each criterion is met only when its proof is linked here.
 dvc repro` reproduces `metrics/eval.json` within tolerance, and the
 reproducibility test passes.
 
-**Tolerance.** Absolute 1e-9 on every numeric metric (`scripts/reproduce.sh`,
-`TOLERANCE`). `git_sha` inside the file is excluded: it records the commit at
-training time, which is by construction the parent of the commit that
-contains the metrics.
+**Tolerance.** Absolute **1e-9 minutes on predictions** and 1e-9 on every
+metric (`PRED_TOLERANCE`, `TOLERANCE`). Predictions are the primary check —
+equal metrics can hide compensating differences. `git_sha` is excluded: it
+records the commit at training time. See `docs/reproducibility.md`.
 
-**Proof.** `make reproduce` on commit `c13cdf3e1935b8fa68c6574680b31e12d56d3373`,
-2026-09-22, this machine (Apple Silicon, 4 threads):
+**Every stage is re-executed** (`dvc repro --force --no-run-cache`). Without
+those flags DVC restored cached outputs in 1.1 s and reported everything
+identical, which proves only that the cache works — the milestone's own
+warning that "downloading an existing model does not demonstrate reproducible
+training" applies to the run cache too.
+
+**Proof.** `make reproduce` on commit `ab70bd93`, 2026-09-22, this machine
+(Apple Silicon, 4 threads), every stage re-executed (model fit 139.7 s on
+7,195,609 rows, 4 m 46 s total):
 
 ```
-== dvc metrics diff (committed vs reproduced)
-| Path              | Metric   | HEAD     | workspace | Change |
-| metrics/eval.json | git_sha  | 3c947b5… | c13cdf3…  | -      |
-== numeric comparison, tolerance 1e-9
-metrics identical within tolerance
-== reproduce OK for c13cdf3e1935b8fa68c6574680b31e12d56d3373
+== predictions, tolerance 1e-09 min
+   80 predictions compared, largest difference 0.000e+00 min
+== metrics, tolerance 1e-09
+   every metric identical within tolerance
+== reproduce OK for ab70bd93799066e91b2cac0a6d106aecd5a6781c
 ```
 
-Wall clock 2 min 48 s (clone, `uv sync`, `dvc pull` from the local remote,
-full `dvc repro` incl. a 53 s model fit, MLflow to SQLite).
+Bit-identical, not merely within tolerance. The 80 predictions are a fixed
+grid of 8 routes × 5 hours × 2 days in `reports/eval/fixture_predictions.csv`.
 
 `tests/test_pipeline.py::test_reproducibility_two_fits_identical` (fixture
 data, runs in CI) asserts two fits from identical inputs give identical
 predictions and identical fallback tables.
 
-**Caveats.** The DVC remote is a local directory on this machine until the S3
-remote exists (ADR-0004); a second machine cannot yet `dvc pull`. Determinism
-is established for the same `n_threads`; a different thread count is a
-different `params.yaml` and a different `dvc.lock`.
+**Caveats.** Determinism is established on one machine with one `uv.lock`,
+seed and thread count; a different CPU or BLAS build could reorder
+floating-point sums, which is why a tolerance is declared at all. The DVC
+remote is the private S3 bucket — without access, `make ingest` rebuilds the
+raw layer from TLC's public files and the md5s in `reports/ingest/` confirm
+it is the same data.
 
 ## 2. Registry rollback — MET locally; live half pending (Phase 6)
 

@@ -23,9 +23,12 @@ from tripduration.config import Params, load_params
 from tripduration.fallback import FallbackTable
 from tripduration.features import (
     DEPARTURE,
+    DO,
     FEATURE_COLUMNS,
+    PU,
     TARGET,
     ReferenceData,
+    build_features,
 )
 from tripduration.train import FALLBACK_FILE, META_FILE, MODEL_FILE
 
@@ -62,6 +65,62 @@ def by_group(
             row[f"mae_{name}"] = float(np.abs(p[idx] - y[idx]).mean())
         rows.append(row)
     return pd.DataFrame(rows).sort_values("group").reset_index(drop=True)
+
+
+def top_routes(
+    frame: pd.DataFrame, preds: dict[str, np.ndarray], n: int = 25
+) -> pd.DataFrame:
+    """MAE for the n busiest zone pairs: "results by route", not just by borough."""
+    route = frame[PU].astype(str) + "->" + frame[DO].astype(str)
+    counts = route.value_counts().head(n)
+    sub = frame[route.isin(counts.index)]
+    keep = route[route.isin(counts.index)]
+    picked = {k: v[route.isin(counts.index).to_numpy()] for k, v in preds.items()}
+    out = by_group(sub, picked, keep)
+    return out.sort_values("n", ascending=False).reset_index(drop=True)
+
+
+FIXTURE_ROUTES: tuple[tuple[int, int], ...] = (
+    (132, 161),  # JFK -> Midtown Center
+    (138, 230),  # LaGuardia -> Times Sq
+    (161, 132),  # Midtown Center -> JFK
+    (236, 236),  # Upper East Side, intra-zone
+    (1, 132),  # Newark -> JFK
+    (79, 87),  # East Village -> Financial District
+    (7, 179),  # Astoria -> Old Astoria
+    (48, 68),  # Clinton East -> East Chelsea
+)
+FIXTURE_HOURS: tuple[int, ...] = (0, 8, 12, 17, 22)
+
+
+def fixture_predictions(
+    model: Any, fb: FallbackTable, ref: ReferenceData
+) -> pd.DataFrame:
+    """Predictions for a fixed, code-defined request grid.
+
+    This file — not the metrics — is what `make reproduce` compares, because
+    equal metrics can hide compensating differences while equal predictions
+    on the same inputs cannot.
+    """
+    rows = [
+        {PU: pu, DO: do, DEPARTURE: pd.Timestamp(f"2025-01-{day:02d} {hour:02d}:30:00")}
+        for pu, do in FIXTURE_ROUTES
+        for hour in FIXTURE_HOURS
+        for day in (6, 11)  # a Monday and a Saturday
+    ]
+    frame = pd.DataFrame(rows)
+    pred_model = np.maximum(model.predict(build_features(frame, ref)), 0.0)
+    pred_fb, level = fb.predict(frame, ref)
+    return pd.DataFrame(
+        {
+            PU: frame[PU],
+            DO: frame[DO],
+            DEPARTURE: frame[DEPARTURE].astype(str),
+            "model_min": np.round(pred_model, 6),
+            "fallback_min": np.round(pred_fb, 6),
+            "fallback_level": level,
+        }
+    )
 
 
 def evaluate_split(
@@ -120,6 +179,9 @@ def run(
         by_group(frame, preds, pair).to_csv(
             reports_dir / f"{split}_mae_by_borough_pair.csv", index=False
         )
+        top_routes(frame, preds).to_csv(
+            reports_dir / f"{split}_mae_by_route.csv", index=False
+        )
         log.info(
             "%s (%s): MAE model=%.3f fallback=%.3f  P90 model=%.2f fallback=%.2f",
             split,
@@ -129,6 +191,13 @@ def run(
             res["model"]["p90_ae"],
             res["fallback"]["p90_ae"],
         )
+    fixture = fixture_predictions(model, fb, ref)
+    fixture.to_csv(reports_dir / "fixture_predictions.csv", index=False)
+    result["fixture_predictions"] = {
+        "rows": len(fixture),
+        "file": str(reports_dir / "fixture_predictions.csv"),
+        "model_min_sum": round(float(fixture["model_min"].sum()), 6),
+    }
     result["model_beats_fallback_on_test"] = bool(
         result["test"]["model"]["mae"] < result["test"]["fallback"]["mae"]
     )
