@@ -51,6 +51,16 @@ MAPE is 31–35 % and dominated by short trips; MAE is the primary metric
   PU == DO reflect the median intra-zone trip, not a zero.
 - **Time semantics:** naive input is New York local time (ADR-0009).
 
+## A caveat on the reported numbers
+
+The metrics above were computed on the machine that trained the model
+(arm64). Serving runs on x86_64 Lambda, where the same model's predictions
+differ by a mean of 0.043 min and at most 0.597 min — up to 2% — because a
+feature value differing in its last bits can fall the other side of a tree
+split. The measurement and its consequences are in
+`docs/reproducibility.md`. Models promoted from a scheduled retrain PR are
+trained on `ubuntu-latest` (x86_64) and therefore measured where they serve.
+
 ## Champion selection and rollback
 
 ADR-0007: a challenger is promoted only if it beats the champion's MAE on the

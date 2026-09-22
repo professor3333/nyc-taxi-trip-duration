@@ -92,6 +92,39 @@ real	4m46.001s
 == reproduce OK for ab70bd93799066e91b2cac0a6d106aecd5a6781c
 ```
 
+## Predictions are architecture-sensitive — measured
+
+Same model bytes, same features, different CPU architecture, different answer:
+
+| | arm64 (this laptop) | linux/amd64 (the Lambda image) |
+|---|---|---|
+| zone 138 → 230, 2025-01-11 00:30 | 24.9627 min | 25.3806 min |
+
+The features are identical to the last digit printed (`centroid_dist_km`
+9.474219, `weekday` 5, `is_holiday` 0) and `model.pkl` is byte-identical
+(md5 `f575719b…`). A feature value that differs in its final bits falls the
+other side of a tree split, and the sample lands in a different leaf.
+
+Across the 80-row grid for champion v3: **every row differs, mean 0.043 min
+(2.6 s), max 0.597 min, at most 1.98% of the prediction.** For champion v1
+the same comparison gives 0.000 — fewer trees, fewer thresholds to straddle,
+so it is luck rather than a property to rely on.
+
+Consequences, all of them recorded rather than assumed:
+
+- `models/champion.json › fixture_platform` says where the expected
+  predictions were computed (`Darwin-arm64` today).
+- `deploy_check.py --expect-fixture` defaults to `--fixture-tolerance 1.0`
+  minute, justified by the measurement above. Pass `1e-9` when both sides
+  share an architecture — that is the stricter check and the one
+  `make reproduce` uses.
+- The MAE in `metrics/eval.json` was computed on the training machine. The
+  deployed model's predictions differ by ≲2%, so the served accuracy is not
+  exactly the reported number. The honest way to close that gap is to train
+  and evaluate on the serving architecture; the retrain workflow already runs
+  on `ubuntu-latest` (x86_64), so a model promoted from a retrain PR is
+  measured where it serves.
+
 ## The other two reproducibility checks
 
 - `tests/test_pipeline.py::test_reproducibility_two_fits_identical` — two fits
