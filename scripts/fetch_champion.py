@@ -1,16 +1,23 @@
-"""Fetch the champion's artefacts from the DVC remote at the champion's commit.
+"""Fetch the champion's artefacts from the DVC remote by content hash.
 
-    uv run python scripts/fetch_champion.py [--out build/champion/models]
+    uv run python scripts/fetch_champion.py [--out build/champion]
 
-Reads models/champion.json (git), runs `dvc get . <path> --rev <git_sha>` for
-the two DVC-tracked artefacts and `git show <git_sha>:models/model_meta.json`
-for the metadata, verifies the md5s against champion.json, and writes them
-where the Docker build copies from. Never talks to MLflow (G9).
+Reads ``models/champion.json`` (git) and pulls each artefact from the DVC
+remote by its md5, because DVC's remote is content-addressed:
+``<remote>/files/md5/<first 2>/<remaining 30>``. Nothing is read from git
+history and MLflow is never contacted (G9) — deliberately, since the commit
+that trained the model is unreachable on the remote after a squash merge.
+Every file's md5 is recomputed and compared with ``champion.json``.
+
+``models/champion_meta.json`` (written by promote/rollback, in git) is the
+champion's ``model_meta.json``; it is copied out so the image carries the
+feature list the champion was trained with.
 """
 
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import json
 import shutil
@@ -19,89 +26,73 @@ import sys
 from pathlib import Path
 
 
-def sh(*cmd: str) -> str:
-    return subprocess.check_output(cmd, text=True).strip()
-
-
-def remote_config_args() -> list[str]:
-    """`dvc get` clones the repo, so a per-machine remote (.dvc/config.local)
-    must be passed explicitly. A committed S3 remote needs nothing."""
-    try:
-        name = sh("uv", "run", "dvc", "config", "core.remote")
-        url = sh("uv", "run", "dvc", "config", f"remote.{name}.url")
-    except subprocess.CalledProcessError:
-        return []
-    return ["--remote", name, "--remote-config", f"url={url}"]
-
-
 def md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def remote_url(repo: Path) -> str:
+    """The default DVC remote's URL, from .dvc/config then .dvc/config.local."""
+    cfg = configparser.ConfigParser()
+    cfg.read([repo / ".dvc" / "config", repo / ".dvc" / "config.local"])
+    name = cfg.get("core", "remote", fallback=None)
+    if not name:
+        raise SystemExit("no default DVC remote configured")
+    # DVC writes the section header with literal quotes: ['remote "s3"'].
+    for section in (f"'remote \"{name}\"'", f'remote "{name}"'):
+        if cfg.has_section(section):
+            return cfg.get(section, "url")
+    raise SystemExit(f"remote {name} has no url in .dvc/config or .dvc/config.local")
+
+
+def object_url(base: str, digest: str) -> str:
+    return f"{base.rstrip('/')}/files/md5/{digest[:2]}/{digest[2:]}"
+
+
+def fetch(base: str, digest: str, dest: Path) -> None:
+    """dvc get-url handles every remote type DVC supports (s3://, local, …)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(
+        ["uv", "run", "dvc", "get-url", object_url(base, digest), str(dest), "--force"]
+    )
+    got = md5(dest)
+    if got != digest:
+        raise SystemExit(f"md5 mismatch for {dest.name}: got {got}, expected {digest}")
+    print(f"{dest.name}: md5 {got} ok")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
-    ap.add_argument("--out", type=Path, default=Path("build/champion/models"))
-    ap.add_argument("--repo", default=".")
+    ap.add_argument("--meta", type=Path, default=Path("models/champion_meta.json"))
+    ap.add_argument("--out", type=Path, default=Path("build/champion"))
+    ap.add_argument("--repo", type=Path, default=Path("."))
     args = ap.parse_args()
 
     champ = json.loads(args.champion.read_text())
-    sha, out = champ["git_sha"], args.out
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
-    remote = remote_config_args()
-    for name, key in (
-        ("model.pkl", "model_md5"),
-        ("fallback_table.parquet", "fallback_md5"),
-    ):
-        subprocess.check_call(
-            [
-                "uv",
-                "run",
-                "dvc",
-                "get",
-                args.repo,
-                f"models/{name}",
-                "--rev",
-                sha,
-                "-o",
-                str(out / name),
-                *remote,
-            ]
+    base = remote_url(args.repo)
+    models, reference = args.out / "models", args.out / "reference"
+    if args.out.exists():
+        shutil.rmtree(args.out)
+
+    fetch(base, champ["model_md5"], models / "model.pkl")
+    fetch(base, champ["fallback_md5"], models / "fallback_table.parquet")
+    if champ.get("reference_md5"):
+        fetch(base, champ["reference_md5"], reference / "zone_centroids.csv")
+    else:
+        print(
+            "champion.json has no reference_md5; copying the working tree's centroids"
         )
-        got = md5(out / name)
-        if got != champ[key]:
-            print(
-                f"md5 mismatch for {name}: got {got}, champion.json says {champ[key]}",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"{name}: md5 {got} ok")
-    (out / "model_meta.json").write_text(
-        sh("git", "show", f"{sha}:models/model_meta.json") + "\n"
+        reference.mkdir(parents=True, exist_ok=True)
+        shutil.copy(
+            Path("data/reference/zone_centroids.csv"), reference / "zone_centroids.csv"
+        )
+
+    shutil.copy(args.meta, models / "model_meta.json")
+    shutil.copy(args.champion, models / "champion.json")
+    print(
+        f"champion v{champ['version']} (trained at {champ['git_sha'][:8]}) "
+        f"fetched into {args.out}"
     )
-    shutil.copy(args.champion, out / "champion.json")
-    ref_out = out.parent / "reference"
-    ref_out.mkdir(exist_ok=True)
-    subprocess.check_call(
-        [
-            "uv",
-            "run",
-            "dvc",
-            "get",
-            args.repo,
-            "data/reference/zone_centroids.csv",
-            "--rev",
-            sha,
-            "-o",
-            str(ref_out / "zone_centroids.csv"),
-            "--force",
-            *remote,
-        ]
-    )
-    print(f"zone_centroids.csv fetched at {sha[:8]} into {ref_out}")
-    print(f"champion v{champ['version']} (commit {sha[:8]}) fetched into {out}")
     return 0
 
 
