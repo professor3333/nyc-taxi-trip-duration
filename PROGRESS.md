@@ -9,7 +9,7 @@ Tick a line only when its proof command passes, not when the code is written.
 | 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [x] |
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [x] `make reproduce` identical within 1e-9 (exit 1, local) |
 | 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [x] |
-| 5 | Serving: FastAPI, validation, JSON logs, /health /ready, fallback, parity test, Dockerfile, api in Compose | Compose stack serves; fuzz finds no 500; /health degraded when model removed (exit 5 local) | [ ] |
+| 5 | Serving: FastAPI, validation, JSON logs, /health /ready, fallback, parity test, Dockerfile, api in Compose | Compose stack serves; fuzz finds no 500; /health degraded when model removed (exit 5 local) | [x] |
 | 6 | CI complete + AWS deploy: container smoke, deploy/aws/*, deploy.yml, deploy_check.py, ADR-0008 | live URL passes deploy_check; broken PR blocked (exit 3); rollback redeploys previous (exit 2 live) | [ ] |
 | 7 | Scheduled retrain + monitoring: retrain.yml, prospective eval, monitor.yml, alarms, ADR-0010/11, failure_modes.md | dispatched retrain opens PR; monitor issue opens/closes; 422s visible in CloudWatch (exit 5 live) | [ ] |
 | 8 | Cost + docs + ship: cost.md, Fargate comparison, runbook, model card, README, exit_criteria.md | every exit criterion has a linked proof (exit 4) | [ ] |
@@ -51,3 +51,13 @@ Tick a line only when its proof command passes, not when the code is written.
 - ADR-0007 accepted: gate = same test month + lower MAE than champion + beats fallback; register refuses dirty/stale; promote/rollback refuse alias≠file.
 - Real registry (Compose): v1 (max_iter 200, test MAE 4.689) and v2 (max_iter 300, 4.661). Promote 1, promote 2, rollback to 1 — `docs/promotions.md`. champion.json carries git sha + DVC md5s so the image build never needs MLflow.
 - 78 tests. Retrain after a train.py edit produced a byte-identical model.pkl (`dvc push`: "Everything is up to date").
+
+## Phase 5 log
+
+- FastAPI: `/predict`, `/predict/batch` (cap from params), `/health`, `/ready` (503 when degraded). Pydantic v2, extra=forbid, tz-aware → New York (ADR-0009), fixed window from `params.yaml › api`.
+- Startup: model + meta (feature list must equal `FEATURE_COLUMNS`) else fallback table + `degraded`; both missing → process exits.
+- `tripduration.logging`: stdlib JSON formatter, request_id/model_version contextvars; middleware logs one `request` line per call.
+- `model_version` = `vN` only when the loaded model's md5 equals `champion.json`'s — a working-tree model that isn't the champion shows `unregistered:<sha>`.
+- Dockerfile: multi-stage, `uv sync --frozen --no-dev --no-group train`, python:3.12-slim, non-root, Lambda Web Adapter 0.9.1, 903 MB. `scripts/fetch_champion.py` pulls the champion's artefacts from the DVC remote at its commit and verifies md5s; `make docker-build-champion`.
+- Compose `api` service healthy alongside mlflow + postgres.
+- 103 tests: 11 malformed-input cases → 422, non-JSON/empty → 422, 150-example fuzz never 500, degraded/ready/corrupt/feature-mismatch/both-missing, request-log fields, champion md5 → `v7`, **parity** offline vs API on 40 rows + batch (G7).

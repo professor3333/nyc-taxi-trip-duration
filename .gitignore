@@ -28,3 +28,6 @@ mlartifacts/
 .DS_Store
 .idea/
 .vscode/
+
+# fetch_champion.py output, consumed by the Docker build
+build/

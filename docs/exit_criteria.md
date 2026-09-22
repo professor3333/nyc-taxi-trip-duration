@@ -56,8 +56,27 @@ PR #1 shows a deliberately failing test red (run 35686689059) then green
 this criterion is ticked when a blocked PR exists.
 
 ## 4. Cost is known — pending (Phase 8)
-## 5. Malformed input never 500s and is logged — pending (Phase 5 local, Phase 7 live)
+## 5. Malformed input never 500s and is logged — MET locally; live pending (Phase 7)
+
+**Proof (local).** `tests/test_api.py`: 11 parametrised malformed bodies
+(missing field, wrong type, zone 999, 264, 265, 0, bad time, time before and
+after the window, extra field, empty object) → 422 with `request_id` and a
+field-level message; non-JSON / empty body → 422; hypothesis fuzz of 150
+random and near-valid bodies → never 500. `test_request_log_line_has_required_fields`
+asserts one JSON `request` line per call with `ts, level, logger, msg,
+request_id, model_version, method, path, status, latency_ms, model_kind`,
+and a WARNING `validation_error` line per rejected request. Container run
+2026-09-22 (image `tripduration:champion`): zone 264 → 422, `garbage` body →
+422, both logged as WARNING; see PR #10.
 ## 6. Scheduled retraining has run — pending (Phase 7)
-## 7. Compose runs API + MLflow + DB — partial: MLflow + DB up (`make compose-up`); API in Phase 5
+## 7. Compose runs API + MLflow + DB — MET
+
+`docker compose up -d --wait` brings up `postgres` (healthy), `mlflow`
+(healthy, :5001) and `api` (healthy, :8080, built from `Dockerfile`).
+The loop `dvc repro → make register → make promote → make docker-build-champion → curl :8082/predict`
+ran on 2026-09-22: `/health` reported `"model_version": "v1"` after
+`fetch_champion.py` pulled v1's artefacts by md5 from the DVC remote at commit
+`49fb1c0d`, while the working tree held v2's model (which the md5 check
+correctly reported as `unregistered:…`).
 ## 8. Structured logging verified in CloudWatch — pending (Phase 7)
 ## 9. Owner can explain and rebuild every core file — owner's checkpoint

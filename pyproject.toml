@@ -12,6 +12,9 @@ dependencies = [
     "pyarrow>=17",
     "pyyaml>=6",
     "scikit-learn>=1.6",
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "uvicorn>=0.32",
 ]
 
 [dependency-groups]
@@ -27,6 +30,8 @@ dev = [
     "pyarrow-stubs",
     "types-pyyaml",
     "pandas-stubs",
+    "httpx>=0.27",
+    "hypothesis>=6.100",
 ]
 
 [build-system]
