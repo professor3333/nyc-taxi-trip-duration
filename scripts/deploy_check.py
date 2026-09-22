@@ -95,7 +95,7 @@ def _short(resp: Any) -> str:
     return json.dumps(resp)[:160] if isinstance(resp, dict) else str(resp)
 
 
-def offline_fixture_duration(models_dir: Path) -> float:
+def offline_fixture_duration(models_dir: Path, reference_dir: Path) -> float:
     import pickle
 
     import numpy as np
@@ -104,7 +104,7 @@ def offline_fixture_duration(models_dir: Path) -> float:
     from tripduration.features import DEPARTURE, DO, PU, ReferenceData, build_features
 
     ref = ReferenceData.load(
-        Path("data/reference/zone_centroids.csv"), Path("configs/holidays.csv")
+        reference_dir / "zone_centroids.csv", Path("configs/holidays.csv")
     )
     with (models_dir / "model.pkl").open("rb") as fh:
         model = pickle.load(fh)
@@ -134,6 +134,7 @@ def main() -> int:
         type=Path,
         help="compute the expected fixture duration offline from this dir",
     )
+    ap.add_argument("--reference-dir", type=Path, default=Path("data/reference"))
     ap.add_argument("--allow-degraded", action="store_true")
     ap.add_argument(
         "--malformed",
@@ -186,7 +187,7 @@ def main() -> int:
     )
     expected = args.expect_duration
     if expected is None and args.models_dir:
-        expected = offline_fixture_duration(args.models_dir)
+        expected = offline_fixture_duration(args.models_dir, args.reference_dir)
     if expected is not None and isinstance(pred, dict):
         check(
             "fixture matches offline",

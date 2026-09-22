@@ -50,6 +50,6 @@ jobs:
         run: |
           docker run -d --name api -p 8080:8080 tripduration:ci
           for i in $(seq 1 30); do curl -sf localhost:8080/health && break; sleep 1; done
-          uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --models-dir build/ci-models
+          uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --models-dir build/ci-models --reference-dir tests/fixtures
           docker logs api | tail -5
           docker rm -f api
