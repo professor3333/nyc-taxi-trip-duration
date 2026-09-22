@@ -9,6 +9,7 @@ For each failure the system is designed to survive: behaviour, the log line, the
 | model file missing | fallback table serves; `/health` degraded with `load_error`; `/ready` 503 | ERROR `model_load_failed` + traceback at startup | `test_missing_model_degrades_to_fallback` | service degraded |
 | corrupt model | same as missing | same | `test_corrupt_model_degrades_and_ready_503` | service degraded |
 | feature-list mismatch (model trained with other features) | model refused; fallback serves; degraded | ERROR `model_load_failed` "feature list mismatch" | `test_feature_list_mismatch_refuses_model` | service degraded |
+| **feature-list mismatch, observed live 2026-09-22** | `/health` → `{"status":"degraded","model_version":"fallback-v1","model_kind":"fallback","load_error":"ValueError: feature list mismatch: model has ['a','b'], code has [...12 features]"}`; `/ready` 503; `/predict` still 200 from the lookup table | as above, in CloudWatch | `test_promote_never_writes_repo_champion_files` (the regression that caused it) | service degraded |
 | model and fallback both missing | process exits non-zero at startup (broken build) | ERROR + traceback | `test_both_missing_is_a_broken_build` | deploy fails at `deploy_check`; roll back |
 | non-champion model baked into the image | `model_version` = `unregistered:<sha>`; `deploy_check --expect-version` fails | request lines carry the version | `test_champion_version_reported_when_md5_matches`; observed 2026-09-22 with v2's pickle vs v1's champion.json | rollback |
 | unexpected exception in a handler | 500 `{request_id, error:"internal"}` | ERROR `internal_error` with traceback | fuzz finds none; handler unit-tested by construction | Logs Insights by `request_id` |
@@ -23,4 +24,9 @@ For each failure the system is designed to survive: behaviour, the log line, the
 | DST fall-back hour in data | rows in the 3-hour window dropped in `validate` | rejection count `dst_transition_window` | `test_validate.py` DST cases | — |
 | tz-aware request | converted to New York local | — | `test_tz_aware_departure_converted_to_new_york` | — |
 
-**Not yet observed live:** everything in the Lambda/CloudWatch rows — the AWS half is scripted and unrun as of 2026-09-22.
+**Observed live on 2026-09-22** (account 560512681455): malformed input (all
+nine cases → 422 with `request_id`, WARNING lines in CloudWatch), feature-list
+mismatch → degraded fallback, Lambda cold-start timeout (at 1024 MB, before
+ADR-0008's amendment), and ECR/Lambda deploy failures (OCI manifest rejected,
+unreachable git revision, stale Function URL secret). Not yet observed: TLC
+republishing a month, S3 unreachable at build time.
