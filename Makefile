@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback registry-status
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback registry-status serve docker-build docker-build-champion docker-run
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -55,3 +55,18 @@ rollback:     ## Roll champion back to previous_version: make rollback REASON="d
 
 registry-status: ## Aliases, versions and champion.json side by side
 	uv run python scripts/promote.py --status
+
+serve:        ## Run the API locally from the working tree (models/, data/reference/)
+	uv run uvicorn tripduration.api.main:app --port 8080 --no-access-log
+
+docker-build: ## Build the serving image from local models/ (stamps git sha)
+	docker build --build-arg GIT_SHA=$$(git rev-parse HEAD) -t tripduration:dev .
+
+docker-build-champion: ## Fetch champion artefacts from the DVC remote and build the deploy image
+	uv run python scripts/fetch_champion.py
+	docker build --build-arg MODELS_SRC=build/champion/models --build-arg GIT_SHA=$$(git rev-parse HEAD) \
+	  --build-arg MODEL_VERSION=v$$(uv run python -c "import json;print(json.load(open('models/champion.json'))['version'])") \
+	  -t tripduration:champion .
+
+docker-run:   ## Run the image on :8080
+	docker run --rm -p 8080:8080 tripduration:dev

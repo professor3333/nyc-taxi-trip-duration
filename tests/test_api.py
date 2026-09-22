@@ -1,0 +1,394 @@
+"""API: contract, every validation rule -> 422 with field messages, fuzzing
+never yields a 500, degraded and ready semantics, request log fields, and the
+G7 parity test (offline features + model == POST /predict)."""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import pickle
+import shutil
+from collections.abc import Iterator
+from dataclasses import replace
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
+from hypothesis import HealthCheck, given
+from hypothesis import settings as hsettings
+from hypothesis import strategies as st
+
+from tripduration import train
+from tripduration.api.deps import Settings
+from tripduration.api.main import create_app
+from tripduration.config import Params
+from tripduration.features import (
+    DEPARTURE,
+    DO,
+    FEATURE_COLUMNS,
+    PU,
+    ReferenceData,
+    build_features,
+)
+from tripduration.logging import JsonFormatter
+
+ROOT = Path(__file__).resolve().parents[1]
+FIX = ROOT / "tests" / "fixtures"
+GOOD = {
+    "pickup_zone_id": 132,
+    "dropoff_zone_id": 161,
+    "departure_time": "2024-12-10T17:30:00",
+}
+
+
+@pytest.fixture(scope="module")
+def model_dir(tmp_path_factory: pytest.TempPathFactory, params: Params) -> Path:
+    """A real (tiny) trained model + fallback table, from the fixture months."""
+    root = tmp_path_factory.mktemp("api")
+    ref = ReferenceData.load(
+        FIX / "zone_centroids.csv", ROOT / "configs" / "holidays.csv"
+    )
+    rng = np.random.default_rng(1)
+    n = 4000
+    dep = pd.to_datetime("2024-10-01") + pd.to_timedelta(
+        rng.integers(0, 30 * 1440, n), "min"
+    )
+    frame = pd.DataFrame(
+        {PU: rng.integers(1, 264, n), DO: rng.integers(1, 264, n), DEPARTURE: dep}
+    )
+    feats = build_features(frame, ref)
+    frame = pd.concat([feats, frame], axis=1)
+    frame["duration_min"] = 5 + 2.0 * feats["centroid_dist_km"] + rng.normal(0, 1, n)
+    p = replace(params, n_threads=1, model={**params.model, "max_iter": 20})
+    model, fb, _ = train.fit_all(frame, p, ref)
+    out = root / "models"
+    train.write_artifacts(
+        out,
+        model,
+        fb,
+        {
+            "feature_columns": list(FEATURE_COLUMNS),
+            "git_sha": "deadbeefcafe",
+            "train_months": ["2024-10"],
+        },
+    )
+    return out
+
+
+def _settings(model_dir: Path, **over: Any) -> Settings:
+    base = Settings(
+        model_dir=model_dir,
+        reference_dir=FIX,
+        holidays_path=ROOT / "configs" / "holidays.csv",
+        params_path=Path("/nonexistent"),
+        log_level="INFO",
+        departure_min=date(2024, 1, 1),
+        departure_max=date(2027, 12, 31),
+        max_batch=5,
+    )
+    return replace(base, **over)
+
+
+@pytest.fixture(scope="module")
+def client(model_dir: Path) -> Iterator[TestClient]:
+    with TestClient(create_app(_settings(model_dir))) as c:
+        yield c
+
+
+# --- happy path -----------------------------------------------------------------------
+
+
+def test_predict_happy_path(client: TestClient) -> None:
+    r = client.post("/predict", json=GOOD)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"duration_min", "model_version", "model_kind", "request_id"}
+    assert body["duration_min"] > 0 and body["model_kind"] == "model"
+    assert body["model_version"].startswith(
+        "unregistered:deadbeef"
+    )  # no champion.json in this dir
+    assert r.headers["x-request-id"] == body["request_id"]
+
+
+def test_request_id_header_is_honoured(client: TestClient) -> None:
+    r = client.post("/predict", json=GOOD, headers={"x-request-id": "abc-123"})
+    assert r.json()["request_id"] == "abc-123"
+
+
+def test_health_and_ready_ok(client: TestClient) -> None:
+    h = client.get("/health").json()
+    assert (
+        h["status"] == "ok" and h["model_kind"] == "model" and h["load_error"] is None
+    )
+    assert set(h) >= {"status", "model_version", "model_kind", "loaded_at", "git_sha"}
+    r = client.get("/ready")
+    assert r.status_code == 200 and r.json()["ready"] is True
+    assert r.json()["fixture_duration_min"] > 0
+
+
+def test_batch(client: TestClient) -> None:
+    r = client.post(
+        "/predict/batch", json={"items": [GOOD, {**GOOD, "pickup_zone_id": 1}]}
+    )
+    assert r.status_code == 200 and len(r.json()["predictions"]) == 2
+    r = client.post("/predict/batch", json={"items": [GOOD] * 6})  # max_batch 5
+    assert r.status_code == 422 and r.json()["errors"][0]["field"] == "items"
+
+
+def test_tz_aware_departure_converted_to_new_york(client: TestClient) -> None:
+    naive = client.post(
+        "/predict", json={**GOOD, "departure_time": "2024-12-10T17:30:00"}
+    ).json()
+    aware = client.post(
+        "/predict", json={**GOOD, "departure_time": "2024-12-10T22:30:00Z"}
+    ).json()  # EST = UTC-5
+    assert naive["duration_min"] == aware["duration_min"]
+
+
+# --- every validation rule -> 422 with field messages ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "field"),
+    [
+        (
+            {k: v for k, v in GOOD.items() if k != "dropoff_zone_id"},
+            "dropoff_zone_id",
+        ),  # missing
+        ({**GOOD, "pickup_zone_id": "abc"}, "pickup_zone_id"),  # wrong type
+        ({**GOOD, "pickup_zone_id": 999}, "pickup_zone_id"),  # out of range
+        ({**GOOD, "dropoff_zone_id": 264}, "dropoff_zone_id"),  # Unknown zone
+        ({**GOOD, "dropoff_zone_id": 265}, "dropoff_zone_id"),  # Outside NYC
+        ({**GOOD, "pickup_zone_id": 0}, "pickup_zone_id"),
+        ({**GOOD, "departure_time": "not a time"}, "departure_time"),
+        (
+            {**GOOD, "departure_time": "2019-06-01T08:00:00"},
+            "departure_time",
+        ),  # before window
+        (
+            {**GOOD, "departure_time": "2031-01-01T08:00:00"},
+            "departure_time",
+        ),  # after window
+        ({**GOOD, "surprise": 1}, "surprise"),  # extra field
+        ({}, "pickup_zone_id"),  # empty object
+    ],
+)
+def test_validation_errors_are_422_with_fields(
+    client: TestClient, body: dict[str, Any], field: str
+) -> None:
+    r = client.post("/predict", json=body)
+    assert r.status_code == 422, r.text
+    js = r.json()
+    assert "request_id" in js and js["errors"]
+    assert any(e["field"] == field for e in js["errors"]), js
+
+
+def test_non_json_and_empty_bodies(client: TestClient) -> None:
+    r = client.post(
+        "/predict",
+        content=b"this is not json",
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 422 and "request_id" in r.json()
+    r = client.post(
+        "/predict", content=b"", headers={"content-type": "application/json"}
+    )
+    assert r.status_code == 422 and "request_id" in r.json()
+    r = client.post("/predict", content=b"<xml/>", headers={"content-type": "text/xml"})
+    assert r.status_code in (415, 422) and "request_id" in r.json()
+
+
+# --- fuzz: nothing yields a 500 -------------------------------------------------------
+
+_json = st.recursive(
+    st.none()
+    | st.booleans()
+    | st.integers(-(10**9), 10**9)
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=20),
+    lambda kids: (
+        st.lists(kids, max_size=4)
+        | st.dictionaries(st.text(max_size=10), kids, max_size=4)
+    ),
+    max_leaves=8,
+)
+_near_valid = st.fixed_dictionaries(
+    {
+        "pickup_zone_id": st.integers(-5, 300) | st.text(max_size=5) | st.none(),
+        "dropoff_zone_id": st.integers(-5, 300)
+        | st.floats(allow_nan=False, allow_infinity=False)
+        | st.none(),
+        "departure_time": st.text(max_size=30) | st.integers() | st.none(),
+    }
+)
+
+
+@given(body=_json | _near_valid)
+@hsettings(
+    max_examples=150,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_fuzz_never_500(client: TestClient, body: Any) -> None:
+    r = client.post("/predict", json=body)
+    assert r.status_code in (200, 422), (r.status_code, body)
+    assert "request_id" in r.json()
+
+
+# --- degraded / ready -----------------------------------------------------------------
+
+
+def test_missing_model_degrades_to_fallback(model_dir: Path, tmp_path: Path) -> None:
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    (d / "model.pkl").unlink()
+    with TestClient(create_app(_settings(d))) as c:
+        h = c.get("/health").json()
+        assert h["status"] == "degraded" and h["model_kind"] == "fallback"
+        assert "FileNotFoundError" in h["load_error"]
+        r = c.post("/predict", json=GOOD)
+        assert r.status_code == 200 and r.json()["model_kind"] == "fallback"
+        assert r.json()["model_version"] == "fallback"
+        assert c.get("/ready").status_code == 503
+
+
+def test_corrupt_model_degrades_and_ready_503(model_dir: Path, tmp_path: Path) -> None:
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    (d / "model.pkl").write_bytes(b"\x80\x04not a pickle")
+    with TestClient(create_app(_settings(d))) as c:
+        assert c.get("/health").json()["status"] == "degraded"
+        assert c.get("/ready").status_code == 503
+        assert c.post("/predict", json=GOOD).status_code == 200
+
+
+def test_feature_list_mismatch_refuses_model(model_dir: Path, tmp_path: Path) -> None:
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    meta = json.loads((d / "model_meta.json").read_text())
+    meta["feature_columns"] = meta["feature_columns"][:-1]
+    (d / "model_meta.json").write_text(json.dumps(meta))
+    with TestClient(create_app(_settings(d))) as c:
+        h = c.get("/health").json()
+        assert h["status"] == "degraded" and "feature list mismatch" in h["load_error"]
+
+
+def test_both_missing_is_a_broken_build(tmp_path: Path) -> None:
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(FileNotFoundError):
+        with TestClient(create_app(_settings(tmp_path / "empty"))):
+            pass
+
+
+def test_champion_version_reported_when_md5_matches(
+    model_dir: Path, tmp_path: Path
+) -> None:
+    import hashlib
+
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    (d / "champion.json").write_text(
+        json.dumps(
+            {
+                "version": 7,
+                "model_md5": hashlib.md5((d / "model.pkl").read_bytes()).hexdigest(),
+                "fallback_md5": "x",
+            }
+        )
+    )
+    with TestClient(create_app(_settings(d))) as c:
+        assert c.get("/health").json()["model_version"] == "v7"
+        assert c.post("/predict", json=GOOD).json()["model_version"] == "v7"
+
+
+# --- logging --------------------------------------------------------------------------
+
+
+def test_request_log_line_has_required_fields(model_dir: Path) -> None:
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("tripduration.api.request")
+    logger.addHandler(handler)
+    try:
+        with TestClient(create_app(_settings(model_dir))) as c:
+            c.post("/predict", json=GOOD, headers={"x-request-id": "log-test"})
+            c.post("/predict", json={})
+    finally:
+        logger.removeHandler(handler)
+    lines = [
+        json.loads(line)
+        for line in buf.getvalue().splitlines()
+        if '"event": "request"' in line
+    ]
+    ok = next(line for line in lines if line["request_id"] == "log-test")
+    assert set(ok) >= {
+        "ts",
+        "level",
+        "logger",
+        "msg",
+        "request_id",
+        "model_version",
+        "method",
+        "path",
+        "status",
+        "latency_ms",
+        "model_kind",
+    }
+    assert (
+        ok["status"] == 200
+        and ok["method"] == "POST"
+        and ok["path"] == "/predict"
+        and ok["model_kind"] == "model"
+    )
+    bad = [line for line in lines if line["status"] == 422]
+    assert bad and bad[0]["model_kind"] is None
+
+
+# --- parity (G7) ----------------------------------------------------------------------
+
+
+def test_parity_offline_pipeline_vs_api(client: TestClient, model_dir: Path) -> None:
+    """Same rows through features.build_features + model.predict and POST /predict."""
+    ref = ReferenceData.load(
+        FIX / "zone_centroids.csv", ROOT / "configs" / "holidays.csv"
+    )
+    with (model_dir / "model.pkl").open("rb") as fh:
+        model = pickle.load(fh)
+    rng = np.random.default_rng(7)
+    n = 40
+    frame = pd.DataFrame(
+        {
+            PU: rng.integers(1, 264, n),
+            DO: rng.integers(1, 264, n),
+            DEPARTURE: pd.to_datetime("2024-12-01")
+            + pd.to_timedelta(rng.integers(0, 30 * 1440, n), "min"),
+        }
+    )
+    offline = np.maximum(model.predict(build_features(frame, ref)), 0.0)
+    for i in range(n):
+        r = client.post(
+            "/predict",
+            json={
+                "pickup_zone_id": int(frame[PU][i]),
+                "dropoff_zone_id": int(frame[DO][i]),
+                "departure_time": frame[DEPARTURE][i].isoformat(),
+            },
+        )
+        assert r.status_code == 200
+        assert abs(r.json()["duration_min"] - round(float(offline[i]), 2)) < 1e-9
+    items = [
+        {
+            "pickup_zone_id": int(frame[PU][i]),
+            "dropoff_zone_id": int(frame[DO][i]),
+            "departure_time": frame[DEPARTURE][i].isoformat(),
+        }
+        for i in range(5)
+    ]
+    batch = client.post("/predict/batch", json={"items": items}).json()["predictions"]
+    assert batch == [round(float(x), 2) for x in offline[:5]]

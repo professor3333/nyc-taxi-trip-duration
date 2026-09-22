@@ -43,3 +43,8 @@ model:                      # ADR-0006 — sklearn HistGradientBoostingRegressor
 
 mlflow:
   experiment: nyc-taxi-trip-duration
+
+api:                        # ADR-0009 — accepted departure_time window (inclusive, New York local)
+  departure_min: "2024-01-01"
+  departure_max: "2027-12-31"
+  max_batch: 100
