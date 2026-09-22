@@ -4,7 +4,10 @@
 # + write for retrain). No long-lived keys in GitHub. Idempotent.
 source "$(dirname "$0")/env.sh"
 IAM_DIR="$(dirname "$0")/iam"
-render() { sed -e "s/ACCOUNT_ID/$ACCOUNT_ID/g" -e "s/AWS_REGION/$AWS_REGION/g" -e "s#GITHUB_REPO#$GITHUB_REPO#g" \
+render() { sed -e "s/ACCOUNT_ID/$ACCOUNT_ID/g" -e "s/AWS_REGION/$AWS_REGION/g" \
+               -e "s/GITHUB_OWNER_ID/$GITHUB_OWNER_ID/g" -e "s/GITHUB_REPO_ID/$GITHUB_REPO_ID/g" \
+               -e "s/GITHUB_OWNER/$GITHUB_OWNER/g" -e "s/GITHUB_NAME/$GITHUB_NAME/g" \
+               -e "s#GITHUB_REPO#$GITHUB_REPO#g" \
                -e "s/ECR_REPOSITORY/$ECR_REPOSITORY/g" -e "s/LAMBDA_FUNCTION_NAME/$LAMBDA_FUNCTION_NAME/g" -e "s/S3_BUCKET/$S3_BUCKET/g" "$1"; }
 
 # Lambda execution role
@@ -24,9 +27,14 @@ fi
 
 # GitHub Actions role
 if ! aws iam get-role --role-name "$GH_OIDC_ROLE_NAME" >/dev/null 2>&1; then
-  aws iam create-role --role-name "$GH_OIDC_ROLE_NAME" --assume-role-policy-document "$(render "$IAM_DIR/github-oidc-trust.json")" --tags "$TAGS" >/dev/null
-  log "created role $GH_OIDC_ROLE_NAME (trusts repo $GITHUB_REPO)"
+  aws iam create-role --role-name "$GH_OIDC_ROLE_NAME" \
+    --assume-role-policy-document "$(render "$IAM_DIR/github-oidc-trust.json")" --tags "$TAGS" >/dev/null
+  log "created role $GH_OIDC_ROLE_NAME"
+else
+  aws iam update-assume-role-policy --role-name "$GH_OIDC_ROLE_NAME" \
+    --policy-document "$(render "$IAM_DIR/github-oidc-trust.json")"
 fi
+log "trusts $GITHUB_REPO (owner id $GITHUB_OWNER_ID, repo id $GITHUB_REPO_ID)"
 aws iam put-role-policy --role-name "$GH_OIDC_ROLE_NAME" --policy-name "${PROJECT}-deploy" --policy-document "$(render "$IAM_DIR/github-actions-policy.json")"
 echo "AWS_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GH_OIDC_ROLE_NAME}"
 echo "LAMBDA_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"

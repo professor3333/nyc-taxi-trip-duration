@@ -27,6 +27,7 @@ MODEL_NAME = "nyc-taxi-trip-duration"
 CHAMPION = "champion"
 CHALLENGER = "challenger"
 CHAMPION_FILE = Path("models/champion.json")
+CHAMPION_META_FILE = Path("models/champion_meta.json")
 PROMOTIONS_LOG = Path("docs/promotions.md")
 
 ARTEFACTS = (
@@ -43,6 +44,13 @@ class RegistryError(RuntimeError):
 
 @dataclass(frozen=True)
 class ChampionState:
+    """What a deploy needs, without git history or MLflow (G9).
+
+    ``git_sha`` is provenance only: after a squash merge that commit is not
+    reachable on the remote, so artefacts are fetched by **content hash**
+    (``model_md5``, ``fallback_md5``, ``reference_md5``) from the DVC remote.
+    """
+
     model_name: str
     version: int
     run_id: str
@@ -55,6 +63,7 @@ class ChampionState:
     promoted_at: str
     previous_version: int | None
     reason: str
+    reference_md5: str = ""  # data/reference/zone_centroids.csv, from dvc.lock
 
     @classmethod
     def read(cls, path: Path = CHAMPION_FILE) -> ChampionState | None:
@@ -277,6 +286,35 @@ def _log_promotion(line: str, log_path: Path = PROMOTIONS_LOG) -> None:
         fh.write(line + "\n")
 
 
+def save_champion_meta(
+    client: MlflowClient, version: int, model_name: str, dest: Path = CHAMPION_META_FILE
+) -> None:
+    """Copy the registered version's model_meta.json into git.
+
+    The deploy needs the champion's feature list, and the commit that produced
+    it can be unreachable after a squash merge, so the file travels with
+    champion.json instead of being read out of git history.
+    """
+    mv = client.get_model_version(model_name, str(version))
+    if not mv.run_id:
+        raise RegistryError(
+            f"version {version} has no run id; cannot fetch model_meta.json"
+        )
+    local = client.download_artifacts(mv.run_id, "models/model_meta.json")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(Path(local).read_text())
+
+
+def _reference_md5(
+    pointer: Path = Path("data/reference/zone_centroids.csv.dvc"),
+) -> str:
+    """md5 of the zone centroids, from its .dvc pointer (not a pipeline output)."""
+    if not pointer.exists():
+        return ""
+    outs = yaml.safe_load(pointer.read_text()).get("outs", [])
+    return str(outs[0]["md5"]) if outs else ""
+
+
 def _row(
     state: ChampionState, action: str, from_version: int | None, reason: str
 ) -> str:
@@ -296,6 +334,7 @@ def promote(
     model_name: str = MODEL_NAME,
     champion_file: Path = CHAMPION_FILE,
     log_path: Path = PROMOTIONS_LOG,
+    meta_file: Path = CHAMPION_META_FILE,
     monitoring_dir: Path = Path("reports/monitoring"),
 ) -> ChampionState:
     mlflow.set_tracking_uri(tracking_uri)
@@ -333,8 +372,10 @@ def promote(
         promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
         previous_version=current.version if current else None,
         reason=reason,
+        reference_md5=_reference_md5(),
     )
     state.write(champion_file)
+    save_champion_meta(client, version, model_name, meta_file)
     _log_promotion(
         _row(state, "promote", current.version if current else None, reason), log_path
     )
@@ -348,6 +389,7 @@ def rollback(
     model_name: str = MODEL_NAME,
     champion_file: Path = CHAMPION_FILE,
     log_path: Path = PROMOTIONS_LOG,
+    meta_file: Path = CHAMPION_META_FILE,
 ) -> ChampionState:
     """Set champion back to the previous version recorded in champion.json."""
     mlflow.set_tracking_uri(tracking_uri)
@@ -378,8 +420,10 @@ def rollback(
         promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
         previous_version=current.version,
         reason=reason,
+        reference_md5=_reference_md5(),
     )
     state.write(champion_file)
+    save_champion_meta(client, prev, model_name, meta_file)
     _log_promotion(_row(state, "rollback", current.version, reason), log_path)
     return state
 

@@ -6,8 +6,9 @@
   "model_md5": "2c521291dc8cef52dcca29988bb00699",
   "model_name": "nyc-taxi-trip-duration",
   "previous_version": 3,
-  "promoted_at": "2026-09-22T12:23:29+00:00",
-  "reason": "exit criterion 2 live: prove rollback redeploys the previous champion",
+  "promoted_at": "2026-09-22T12:41:28+00:00",
+  "reason": "exit criterion 2 live: rollback redeploys the previous champion",
+  "reference_md5": "79c1bb833dae873054bef4867a70914e",
   "run_id": "502fe6e4792644b1a5b141b4c163cf9f",
   "test_month": "2024-12",
   "version": 1

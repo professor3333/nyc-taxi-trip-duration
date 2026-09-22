@@ -14,6 +14,14 @@ export LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-${PROJECT}}"
 export LAMBDA_ROLE_NAME="${LAMBDA_ROLE_NAME:-${PROJECT}-lambda-exec}"
 export GH_OIDC_ROLE_NAME="${GH_OIDC_ROLE_NAME:-${PROJECT}-github-actions}"
 export GITHUB_REPO="${GITHUB_REPO:-professor3333/nyc-taxi-trip-duration}"
+# GitHub now puts numeric ids in the OIDC `sub` claim:
+#   repo:<owner>@<owner_id>/<name>@<repo_id>:environment:production
+# The trust policy accepts both shapes; pinning the ids also survives a rename
+# and blocks an attacker who re-registers a freed owner or repo name.
+export GITHUB_OWNER="${GITHUB_REPO%%/*}"
+export GITHUB_NAME="${GITHUB_REPO##*/}"
+export GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-$(gh api "users/$GITHUB_OWNER" --jq .id 2>/dev/null || echo '*')}"
+export GITHUB_REPO_ID="${GITHUB_REPO_ID:-$(gh api "repos/$GITHUB_REPO" --jq .id 2>/dev/null || echo '*')}"
 export BUDGET_EMAIL="${BUDGET_EMAIL:?set BUDGET_EMAIL to the address that receives budget and alarm mail}"
 export LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-14}"
 export LAMBDA_MEMORY_MB="${LAMBDA_MEMORY_MB:-1024}"

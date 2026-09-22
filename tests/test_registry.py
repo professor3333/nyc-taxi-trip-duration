@@ -75,8 +75,12 @@ def registry(tmp_path: Path) -> dict[str, Any]:
 
     def add_version(**tags: Any) -> int:
         with mlflow.start_run(experiment_id=exp.experiment_id) as run:
-            (tmp_path / "x.txt").write_text("x")
-            mlflow.log_artifact(str(tmp_path / "x.txt"), artifact_path="models")
+            # promote()/rollback() copy this artefact into models/champion_meta.json
+            meta = tmp_path / "model_meta.json"
+            meta.write_text(
+                json.dumps({"feature_columns": ["a", "b"], "train_months": ["2024-10"]})
+            )
+            mlflow.log_artifact(str(meta), artifact_path="models")
             src = f"{run.info.artifact_uri}/models"
         mv = client.create_model_version(
             MODEL, source=src, run_id=run.info.run_id, tags=_tags(**tags)
@@ -89,6 +93,7 @@ def registry(tmp_path: Path) -> dict[str, Any]:
         "add": add_version,
         "file": tmp_path / "champion.json",
         "log": tmp_path / "promotions.md",
+        "meta": tmp_path / "champion_meta.json",
     }
 
 
