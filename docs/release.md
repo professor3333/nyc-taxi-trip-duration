@@ -78,7 +78,22 @@ A broken change therefore cannot reach deployment: it cannot merge (CI red,
 `mergeStateStatus: BLOCKED`), and the only other route into `deploy.yml`
 re-runs the same checks.
 
-**Evidence:** PR #12 pushed a deliberate `Dockerfile` error — CI run
-`35694641243` failed at the container smoke, `gh pr merge` was refused with
-*"the base branch policy prohibits the merge"*, and no deploy run exists for
-that commit. The fix turned CI green and merged.
+**Evidence.** Three deliberate breaks, each blocked, none deployed:
+
+| break | first failing step | merge | deploy runs |
+|---|---|---|---|
+| `Dockerfile`: `COPY src ./srcc` (PR #12) | Container smoke | BLOCKED | none |
+| `centroid_dist_km * 1.15` in the **shared** feature module (PR #32) | Data-transformation and API tests — `test_spatial_features` | BLOCKED | none |
+| `departure_time.dt.floor("h")` in the **API only** (PR #32) | **Training/inference feature consistency** — `test_parity_offline_pipeline_vs_api`, `assert 0.02 < 1e-09` | BLOCKED | none |
+
+The middle row is worth reading twice. Scaling a feature inside the *shared*
+module did **not** fail the consistency check, because training and serving
+both use that module and therefore stayed consistent with each other. Parity
+catches **divergence between the two paths**; a feature being *wrong* is
+caught by unit tests on the feature itself. Both guards are needed, and the
+second row is the one that shows why the single-implementation design (G7)
+makes the first kind of bug hard to create by accident.
+
+In every case `gh pr merge` was refused with *"the base branch policy
+prohibits the merge"*, `mergeStateStatus` was `BLOCKED`, and
+`gh run list --workflow deploy` contains no run for the commit.

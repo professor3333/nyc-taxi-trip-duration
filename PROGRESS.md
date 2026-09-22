@@ -109,3 +109,11 @@ Tick a line only when its proof command passes, not when the code is written.
 - `docs/api.md`: the endpoint table, validation table, the departure-time timezone policy (ADR-0009) in one place, the degradation matrix and the log shape.
 - Probes repointed: Dockerfile `AWS_LWA_READINESS_CHECK_PATH=/health/live`, Compose healthcheck, `deploy_check` (which now also checks `/version`).
 - Verified on the Compose stack (api + mlflow + postgres, all healthy): four endpoints answer; four malformed shapes -> 422; tz-aware 22:30Z == naive 17:30; model removed -> fallback with `fallback-v3`; both removed -> 503 and the container still running. 119 tests.
+
+## CI and release pipeline milestone — 2026-09-22
+
+- ECR is now IMMUTABLE (a re-push of `v3` is refused by the registry). `deploy.yml` pushes only unique `<model version>-<commit>` tags and updates Lambda **by digest**, then reads `Code.ImageUri` back and fails if it differs.
+- A dispatched deploy re-runs `make lint && make test` first, closing the one route around branch protection.
+- CI steps named for what they prove, consistency check ordered before the broad suite: lint -> training/inference feature consistency -> data-transformation and API tests -> fixture training -> docker build -> container smoke. No step touches full data or AWS.
+- `docs/release.md`: what each step proves, how the registry version is resolved into the image (promote -> champion.json in git -> fetch by content hash -> baked), immutability, and the gate.
+- Gate proved three ways (PR #12, PR #32 x2): broken Dockerfile, a wrong feature in the shared module, and an API-only transform. All red, all BLOCKED, none deployed. Notable: the shared-module break did *not* fail the parity check - parity catches divergence, unit tests catch wrongness.
