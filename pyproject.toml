@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "pandas>=2.2",
     "pyarrow>=17",
     "pyyaml>=6",
 ]
@@ -15,6 +16,7 @@ dependencies = [
 [dependency-groups]
 train = [
     "dvc[s3]>=3.60",
+    "pyshp>=2.3",
 ]
 dev = [
     "pytest>=8.3",
@@ -22,6 +24,7 @@ dev = [
     "mypy>=1.11",
     "pyarrow-stubs",
     "types-pyyaml",
+    "pandas-stubs",
 ]
 
 [build-system]
