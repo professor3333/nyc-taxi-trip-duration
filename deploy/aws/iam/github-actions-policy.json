@@ -6,7 +6,8 @@
      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload",
                 "ecr:PutImage", "ecr:UploadLayerPart", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:DescribeImages"]},
     {"Sid": "LambdaUpdate", "Effect": "Allow", "Resource": "arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME",
-     "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionConfiguration"]},
+     "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration",
+                "lambda:UpdateFunctionConfiguration", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]},
     {"Sid": "DvcReadModels", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],
      "Resource": ["arn:aws:s3:::S3_BUCKET", "arn:aws:s3:::S3_BUCKET/dvc/*"]},
     {"Sid": "DvcWriteRetrain", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::S3_BUCKET/dvc/*"}

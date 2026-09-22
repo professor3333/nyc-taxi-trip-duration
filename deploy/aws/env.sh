@@ -19,5 +19,7 @@ export LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-14}"
 export LAMBDA_MEMORY_MB="${LAMBDA_MEMORY_MB:-1024}"
 export LAMBDA_TIMEOUT_S="${LAMBDA_TIMEOUT_S:-30}"
 export LAMBDA_RESERVED_CONCURRENCY="${LAMBDA_RESERVED_CONCURRENCY:-5}"
+# AWS_IAM: this account blocks public function URLs (ADR-0008 amendment 2026-09-22).
+export LAMBDA_URL_AUTH_TYPE="${LAMBDA_URL_AUTH_TYPE:-AWS_IAM}"
 
 log() { printf '\033[1;34m[%s]\033[0m %s\n' "$(basename "$0" .sh)" "$*"; }

@@ -19,6 +19,7 @@ dependencies = [
 
 [dependency-groups]
 train = [
+    "boto3>=1.35",
     "dvc[s3]>=3.60",
     "mlflow>=3.0",
     "pyshp>=2.3",
