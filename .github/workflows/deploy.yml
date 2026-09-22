@@ -77,7 +77,11 @@ jobs:
 
       - name: Deploy check (version, fixture prediction, malformed -> 422, cold start)
         run: |
-          uv run python scripts/deploy_check.py --url "${{ secrets.FUNCTION_URL }}" --sigv4 \
+          # --invoke, not the Function URL: this account refuses Function URL
+          # invocations from every principal except the account root, so CI
+          # cannot reach the URL edge (ADR-0008 amendment 2026-09-22). The
+          # Lambda API reaches the same container through the same adapter.
+          uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
             --expect-version ${{ steps.champ.outputs.version }} \
             --models-dir build/champion/models --reference-dir build/champion/reference \
             --malformed --cold --n 5

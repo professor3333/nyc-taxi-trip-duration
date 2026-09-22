@@ -2,6 +2,7 @@
 
     uv run python scripts/deploy_check.py --url http://localhost:8080
     uv run python scripts/deploy_check.py --url $URL --sigv4   # IAM-auth URL
+    uv run python scripts/deploy_check.py --invoke my-function  # via the Lambda API
     uv run python scripts/deploy_check.py --url $URL --expect-version v1
     uv run python scripts/deploy_check.py --url $URL --malformed     # exit criterion 5
     uv run python scripts/deploy_check.py --url $URL --cold --n 5    # cold-start p95
@@ -20,6 +21,7 @@ import statistics
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -85,6 +87,45 @@ def _sign(
     return dict(req.headers)
 
 
+def invoke(
+    function: str, path: str, method: str, body: bytes | None, ctype: str
+) -> tuple[int, dict[str, Any] | str, float]:
+    """Call the function through the Lambda API with a Function-URL event.
+
+    Same container, same Web Adapter, same handlers as an HTTP request to the
+    Function URL; only the URL edge itself is not exercised. Needed because
+    this account refuses Function URL invocations from every principal except
+    the account root (ADR-0008 amendment).
+    """
+    import boto3
+
+    event = {
+        "version": "2.0",
+        "rawPath": path,
+        "rawQueryString": "",
+        "headers": {"content-type": ctype, "host": "lambda-invoke"},
+        "requestContext": {
+            "http": {"method": method, "path": path, "sourceIp": "127.0.0.1"},
+        },
+        "body": body.decode("utf-8", errors="replace") if body else None,
+        "isBase64Encoded": False,
+    }
+    client = boto3.client("lambda")
+    t0 = time.perf_counter()
+    resp = client.invoke(FunctionName=function, Payload=json.dumps(event).encode())
+    raw = resp["Payload"].read()
+    ms = (time.perf_counter() - t0) * 1000
+    if "FunctionError" in resp:
+        return 500, raw.decode(errors="replace")[:300], ms
+    out = json.loads(raw)
+    status = int(out.get("statusCode", 500))
+    text = out.get("body", "")
+    try:
+        return status, json.loads(text), ms
+    except (json.JSONDecodeError, TypeError):
+        return status, str(text)[:200], ms
+
+
 def call(
     url: str,
     method: str = "GET",
@@ -92,7 +133,12 @@ def call(
     ctype: str = "application/json",
     timeout: float = 90,
     sigv4: bool = False,
+    function: str | None = None,
 ) -> tuple[int, dict[str, Any] | str, float]:
+    if function:
+        return invoke(
+            function, urllib.parse.urlparse(url).path or "/", method, body, ctype
+        )
     headers = {"content-type": ctype}
     if sigv4:
         headers = _sign(url, method, body, headers)
@@ -141,7 +187,12 @@ def offline_fixture_duration(models_dir: Path, reference_dir: Path) -> float:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", required=True)
+    ap.add_argument(
+        "--url", default="http://lambda", help="base URL; ignored with --invoke"
+    )
+    ap.add_argument(
+        "--invoke", help="call this Lambda function through the API instead of HTTP"
+    )
     ap.add_argument(
         "--expect-version", help="model_version /health must report, e.g. v1"
     )
@@ -175,13 +226,14 @@ def main() -> int:
     base = args.url.rstrip("/")
     failures: list[str] = []
     sign = args.sigv4
+    fn = args.invoke
 
     def check(name: str, ok: bool, detail: str) -> None:
         print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
         if not ok:
             failures.append(name)
 
-    status, health, ms = call(f"{base}/health", sigv4=sign)
+    status, health, ms = call(f"{base}/health", sigv4=sign, function=fn)
     check("health reachable", status == 200, f"HTTP {status} in {ms:.0f} ms")
     if isinstance(health, dict):
         check(
@@ -197,7 +249,7 @@ def main() -> int:
                 f"{health.get('model_version')} (expected {args.expect_version})",
             )
 
-    status, ready, ms = call(f"{base}/ready", sigv4=sign)
+    status, ready, ms = call(f"{base}/ready", sigv4=sign, function=fn)
     check(
         "ready",
         status == 200,
@@ -205,7 +257,7 @@ def main() -> int:
     )
 
     status, pred, ms = call(
-        f"{base}/predict", "POST", json.dumps(FIXTURE).encode(), sigv4=sign
+        f"{base}/predict", "POST", json.dumps(FIXTURE).encode(), sigv4=sign, function=fn
     )
     check(
         "fixture predict 200",
@@ -224,7 +276,9 @@ def main() -> int:
 
     cases = MALFORMED if args.malformed else MALFORMED[:1]
     for name, body, ctype in cases:
-        status, resp, ms = call(f"{base}/predict", "POST", body, ctype, sigv4=sign)
+        status, resp, ms = call(
+            f"{base}/predict", "POST", body, ctype, sigv4=sign, function=fn
+        )
         has_rid = isinstance(resp, dict) and "request_id" in resp
         check(
             f"malformed: {name}",
@@ -236,7 +290,11 @@ def main() -> int:
         lat = []
         for i in range(args.n):
             _, _, ms = call(
-                f"{base}/predict", "POST", json.dumps(FIXTURE).encode(), sigv4=sign
+                f"{base}/predict",
+                "POST",
+                json.dumps(FIXTURE).encode(),
+                sigv4=sign,
+                function=fn,
             )
             lat.append(ms)
             print(f"      call {i + 1}: {ms:.0f} ms")
