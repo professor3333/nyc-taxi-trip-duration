@@ -28,8 +28,8 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "95942abbc7cc3d50cdf35641252986333fc30202",
-  "mlflow_run_id": "b8abc0edb5a74e108cc92897733cdbbf",
+  "git_sha": "f63d677ea41222b1321ccde361cb5a6e036daa8b",
+  "mlflow_run_id": "7a47535ea52542d7baa680ed71872ea0",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
@@ -41,17 +41,18 @@
   },
   "n_threads": 4,
   "params_hash": "4f3d5ac916d0897f",
-  "python_version": "3.12.6",
+  "python_version": "3.12.3",
   "seed": 42,
   "sklearn_version": "1.9.1",
   "target": "duration_min",
-  "test_month": "2025-01",
+  "test_month": "2025-02",
   "train_months": [
     "2024-10",
-    "2024-11"
+    "2024-11",
+    "2024-12"
   ],
-  "train_rows": 7195609,
-  "val_mae_fallback": 5.0541789087779065,
-  "val_mae_model": 4.6043365690178994,
-  "val_month": "2024-12"
+  "train_rows": 10728156,
+  "val_mae_fallback": 4.107245603977753,
+  "val_mae_model": 3.936458911515736,
+  "val_month": "2025-01"
 }
