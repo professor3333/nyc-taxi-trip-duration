@@ -1,0 +1,112 @@
+name: retrain
+
+# Monthly: ingest the next month if TLC has published it, re-run the pipeline
+# with the ADR-0003 window, evaluate the current champion prospectively on the
+# new month, and open a candidate PR. Registering and promoting stay human
+# (ADR-0010). Opens a `model-drift` issue if ADR-0011's threshold is crossed.
+
+on:
+  schedule:
+    - cron: "0 9 5 * *"   # 5th of each month, 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "YYYY-MM to ingest (default: the month after the newest under data/raw/yellow)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_URI: sqlite:///ci-mlflow.db   # throwaway; the real registry is local (ADR-0004)
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: make setup
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Decide the month
+        id: month
+        run: |
+          if [ -n "${{ inputs.month }}" ]; then M="${{ inputs.month }}"; else
+            LAST=$(ls data/raw/yellow/*.parquet.dvc | sed 's#.*/##; s#.parquet.dvc##' | sort | tail -1)
+            M=$(uv run python -c "from tripduration.prepare import next_month; print(next_month('$LAST'))")
+          fi
+          echo "month=$M" >> "$GITHUB_OUTPUT"; echo "ingesting $M"
+
+      - name: Ingest (404 = not published yet, exits 0)
+        id: ingest
+        run: |
+          make ingest MONTH=${{ steps.month.outputs.month }}
+          if [ -f data/raw/yellow/${{ steps.month.outputs.month }}.parquet ]; then echo "new=true" >> "$GITHUB_OUTPUT"; else echo "new=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Nothing to do
+        if: steps.ingest.outputs.new == 'false'
+        run: echo "TLC has not published ${{ steps.month.outputs.month }} yet"
+
+      - name: dvc pull, add, repro, push
+        if: steps.ingest.outputs.new == 'true'
+        run: |
+          uv run dvc pull -q
+          uv run dvc add data/raw/yellow/${{ steps.month.outputs.month }}.parquet
+          uv run dvc repro
+          uv run dvc push -q
+
+      - name: Prospective evaluation of the champion
+        if: steps.ingest.outputs.new == 'true'
+        id: prospective
+        run: |
+          uv run python scripts/fetch_champion.py
+          uv run python scripts/prospective_eval.py --month ${{ steps.month.outputs.month }} | tee prospective.txt
+          echo "verdict=$(jq -r .verdict reports/monitoring/${{ steps.month.outputs.month }}.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Open candidate PR
+        if: steps.ingest.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          M: ${{ steps.month.outputs.month }}
+        run: |
+          git config user.name "Niroj33"
+          git config user.email "86530493+professor3333@users.noreply.github.com"
+          git switch -c "retrain/$M"
+          git add data/raw/yellow/ dvc.lock metrics/ reports/ models/model_meta.json
+          git commit -m "Retrain candidate $M"
+          git push -u origin "retrain/$M"
+          {
+            echo "## Retrain candidate $M"
+            echo; echo "Split: $(jq -c .split reports/prepare.json)"
+            echo; echo "### Candidate vs fallback"; echo
+            echo '```'; jq '{val: {model: .val.model.mae, fallback: .val.fallback.mae}, test: {month: .test.month, model: .test.model.mae, fallback: .test.fallback.mae}}' metrics/eval.json; echo '```'
+            echo "### Champion prospective on $M"; echo; echo '```'; cat prospective.txt; echo '```'
+            echo "### dvc metrics diff main"; echo; echo '```'; uv run dvc metrics diff main --md || true; echo '```'
+            echo; echo "Register and promote are owner actions: \`make register\`, \`make promote VERSION=<n> REASON=...\` (ADR-0010)."
+          } > body.md
+          gh pr create --title "Retrain candidate $M" --body-file body.md --label retrain || gh pr create --title "Retrain candidate $M" --body-file body.md
+
+      - name: Open model-drift issue
+        if: steps.ingest.outputs.new == 'true' && steps.prospective.outputs.verdict == 'degraded'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          M: ${{ steps.month.outputs.month }}
+        run: |
+          {
+            cat prospective.txt
+            echo
+            echo "See reports/monitoring/$M.json on branch retrain/$M. Threshold: ADR-0011."
+          } > drift.md
+          gh issue create --title "Model drift on $M" --body-file drift.md --label model-drift \
+            || gh issue create --title "Model drift on $M" --body-file drift.md

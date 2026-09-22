@@ -1,0 +1,80 @@
+name: deploy
+
+# Deploys when the champion pointer changes on main (promotion or rollback),
+# or by hand. Fetches the champion's artefacts from the DVC remote (S3) at the
+# champion's commit, builds the image, pushes to ECR, updates Lambda, and runs
+# deploy_check against the Function URL. A failed check fails the workflow;
+# rollback is `make rollback REASON=...` + push (docs/runbook.md).
+
+on:
+  push:
+    branches: [main]
+    paths: [models/champion.json]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # OIDC -> AWS_ROLE_ARN, no long-lived keys
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # fetch_champion.py reads models/model_meta.json at the champion sha
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: make setup
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Read champion
+        id: champ
+        run: |
+          echo "version=v$(jq -r .version models/champion.json)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(jq -r .git_sha models/champion.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch champion artefacts from the DVC remote (S3)
+        run: uv run python scripts/fetch_champion.py
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          IMAGE="$REGISTRY/$REPO"
+          docker build \
+            --build-arg MODELS_SRC=build/champion/models \
+            --build-arg REFERENCE_SRC=build/champion/reference \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg MODEL_VERSION=${{ steps.champ.outputs.version }} \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:${{ steps.champ.outputs.version }}" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:${{ steps.champ.outputs.version }}"
+          echo "IMAGE_URI=$IMAGE:${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Update Lambda and wait
+        run: |
+          aws lambda update-function-code --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" --image-uri "$IMAGE_URI" >/dev/null
+          aws lambda wait function-updated --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}"
+
+      - name: Deploy check (version, fixture prediction, malformed -> 422, cold start)
+        run: |
+          uv run python scripts/deploy_check.py --url "${{ secrets.FUNCTION_URL }}" \
+            --expect-version ${{ steps.champ.outputs.version }} \
+            --models-dir build/champion/models --reference-dir build/champion/reference \
+            --malformed --cold --n 5
