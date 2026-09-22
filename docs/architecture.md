@@ -18,7 +18,7 @@
    make promote   ──► alias champion/challenger; writes models/champion.json; appends docs/promotions.md
         │
         ▼  push to main with champion.json changed → .github/workflows/deploy.yml
-   scripts/fetch_champion.py (dvc get at champion sha, md5-verified) → docker build → ECR → Lambda (container, Web Adapter)
+   scripts/fetch_champion.py (content-addressed pull from the DVC remote, md5-verified) → docker build → ECR → Lambda
         │                                                                                    → Function URL
         ▼
    FastAPI  POST /predict · /predict/batch · GET /health · GET /ready — JSON logs → stdout → CloudWatch
@@ -38,13 +38,21 @@
 | promote / rollback | real, local (`docs/promotions.md`) |
 | FastAPI image, Compose `api` | real; CI builds and smoke-tests it on every PR |
 | branch protection, blocked broken PR | real (PR #12) |
-| AWS (budget, S3, ECR, IAM, Lambda, alarms), deploy.yml, monitor.yml, retrain.yml on Actions | **scripted, not run** — no AWS account on the build machine |
-| cost ledger | "off" — nothing has been created |
+| AWS: budget, S3 (24 objects, 917 MB), ECR, IAM + OIDC, Lambda 3008 MB + IAM-auth Function URL, log group, 2 alarms, SNS | **live** in account 560512681455, us-east-1 |
+| `deploy.yml` | runs on `models/champion*.json` changes; OIDC, fetch-by-hash, buildx → ECR → Lambda → `deploy_check --sigv4` |
+| `monitor.yml`, `retrain.yml` | written; first scheduled runs pending |
+| cost ledger | "on" — measured quantities in `docs/cost.md` |
 
 ## Traceability chain (G8)
 
-`/predict` response `model_version: v3` → `models/champion.json` (version 3,
-`git_sha`, `model_md5`, `fallback_md5`) → registry version 3 tags (`git_sha`,
-`dvc_lock_md5`, `train_run_id`) → commit `f6b2f155` → `dvc.lock` → DVC remote
-object `md5/…` == the bytes in the image. The API reports `unregistered:<sha>`
-if the baked model's md5 is not the champion's.
+`/predict` response `model_version: vN` → `models/champion.json`
+(`version`, `model_md5`, `fallback_md5`, `reference_md5`, `git_sha`) →
+the DVC remote object `files/md5/xx/yyy` == the bytes in the image (verified
+at build time) → registry version tags (`git_sha`, `dvc_lock_md5`,
+`train_run_id`) → the MLflow run. The API reports `unregistered:<sha>` when
+the baked model's md5 is not the champion's, and `fallback-vN` when it
+refused to load one.
+
+**Why by hash, not by commit:** the commit that trained a model is squashed
+away when its PR merges, so `dvc get --rev <git_sha>` fails on a fresh clone.
+Content hashes survive; `git_sha` stays as provenance.
