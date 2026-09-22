@@ -125,3 +125,10 @@ Tick a line only when its proof command passes, not when the code is written.
 - Monitoring extended from 2 metrics to 6: `ErrorCount`, `FallbackCount`, `InvalidRequestCount`, `RequestCount`, `LatencyMs` (p95 alarm), `PredictionMin` (p50 alarm) - the last gives prediction-distribution monitoring on live traffic. `/predict` now logs the value it returned.
 - `docs/recovery.md`: all five demonstrations with commands, observed output and the test that keeps each true. `docs/monitoring.md` states plainly that evaluation error on live traffic is not measurable (no outcomes for arbitrary requests) and that historical replay is the substitute.
 - 124 tests (5 new for the gate).
+
+## Retraining demonstrations — 2026-09-22 (observed on Actions)
+
+- **No new data -> skip:** run 35763985452, check-only for 2026-08 — `No new data - skip retraining` succeeded, everything downstream skipped, job green.
+- **Overlap prevented:** runs 35763985452 / 35763998622 fired 7 s apart; the second sat `pending` until the first finished. `cancel-in-progress: false`, so a queued week is delayed, never dropped.
+- **Gap refused fast:** dispatching 2025-03 with 2025-02 unmerged now fails in 22 s at the contiguity guard with the reason and the fix, instead of after a 70 MB ingest.
+- **Bug found by the weekly schedule:** TLC returns **403**, not 404, for an unpublished month (CloudFront over S3 without ListBucket). Verified live: 2025-03 -> 200; 2026-08, 2099-01 and a nonsense path -> 403. The weekly check would have failed every Monday; both codes are now 'not published' and neither is retried.
