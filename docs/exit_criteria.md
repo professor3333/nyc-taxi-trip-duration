@@ -49,11 +49,19 @@ promote 1→2 (test MAE 4.661 < 4.689, same month 2024-12), rollback 2→1.
 (v2 outputs). Tests: `tests/test_registry.py` (gate, refusals, round trip).
 
 **Pending.** The two `deploy.yml` run URLs and the two live `/health` bodies.
-## 3. CI blocks a broken build — rehearsed, pending branch protection (Phase 6)
+## 3. CI blocks a broken build — MET
 
-PR #1 shows a deliberately failing test red (run 35686689059) then green
-(run 35686734906). Branch protection requiring `ci` is added in Phase 6, and
-this criterion is ticked when a blocked PR exists.
+**Branch protection on `main`** (set 2026-09-22 via `gh api`): required status
+check `ci` (strict), enforce for admins, linear history, no force-push or
+deletion. A direct `git push` to `main` was rejected:
+`GH006: Protected branch update failed … protected branch hook declined`.
+
+**Proof:** PR #12 (https://github.com/professor3333/nyc-taxi-trip-duration/pull/12)
+— a deliberate `Dockerfile` error (`COPY src ./srcc`): CI run 35694641243
+**failure** at *Container smoke*; `gh pr merge` refused with *"the base branch
+policy prohibits the merge"*, `mergeStateStatus: BLOCKED`. The fix commit on
+the same PR turned CI green and the PR mergeable. Rehearsal without
+protection: PR #1 (runs 35686689059 red → 35686734906 green).
 
 ## 4. Cost is known — pending (Phase 8)
 ## 5. Malformed input never 500s and is logged — MET locally; live pending (Phase 7)

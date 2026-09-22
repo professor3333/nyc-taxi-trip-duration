@@ -42,7 +42,7 @@ COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 RUN useradd --system --uid 10001 --create-home app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
-COPY --chown=app:app src ./srcc  # deliberate typo: breaks the image
+COPY --chown=app:app src ./src
 COPY --chown=app:app params.yaml ./params.yaml
 COPY --chown=app:app configs/holidays.csv ./configs/holidays.csv
 COPY --chown=app:app ${REFERENCE_SRC}/zone_centroids.csv ./data/reference/zone_centroids.csv
