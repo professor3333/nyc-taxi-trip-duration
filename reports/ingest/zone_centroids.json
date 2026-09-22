@@ -1,0 +1,10 @@
+{
+  "built_at": "2026-09-22T05:22:38+00:00",
+  "bytes": 1022574,
+  "crs": "NAD83 / New York Long Island (ftUS), EPSG:2263",
+  "output": "data/reference/zone_centroids.csv",
+  "output_md5": "79c1bb833dae873054bef4867a70914e",
+  "source_md5": "06c63faa34f0bf832c86e37fcde13594",
+  "source_url": "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip",
+  "zones": 263
+}

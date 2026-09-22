@@ -1,0 +1,40 @@
+{
+  "split": {
+    "train": [
+      "2024-10"
+    ],
+    "val": "2024-11",
+    "test": "2024-12"
+  },
+  "train_month_count": 1,
+  "rows": {
+    "train": 3692603,
+    "val": 3503006,
+    "test": 3532547
+  },
+  "feature_columns": [
+    "pu_x_km",
+    "pu_y_km",
+    "do_x_km",
+    "do_y_km",
+    "centroid_dist_km",
+    "hour",
+    "minute_of_day",
+    "weekday",
+    "is_weekend",
+    "is_holiday",
+    "pu_borough",
+    "do_borough"
+  ],
+  "request_columns": [
+    "pu_location_id",
+    "do_location_id",
+    "departure_time"
+  ],
+  "target": "duration_min",
+  "params": {
+    "start_month": "2024-10",
+    "train_window_max": 6,
+    "train_sample_frac": 1.0
+  }
+}

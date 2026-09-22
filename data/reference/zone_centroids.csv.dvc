@@ -1,0 +1,5 @@
+outs:
+- md5: 79c1bb833dae873054bef4867a70914e
+  size: 15670
+  hash: md5
+  path: zone_centroids.csv

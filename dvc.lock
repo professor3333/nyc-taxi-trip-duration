@@ -55,3 +55,52 @@ stages:
       md5: ac61dc0a9f924a0332af27b36318a78c.dir
       size: 5557
       nfiles: 3
+  prepare:
+    cmd: uv run python -m tripduration.prepare
+    deps:
+    - path: configs/holidays.csv
+      hash: md5
+      md5: 63cb7aadeda8ac77ddac8eafac4563f5
+      size: 1226
+    - path: data/reference/zone_centroids.csv
+      hash: md5
+      md5: 79c1bb833dae873054bef4867a70914e
+      size: 15670
+    - path: data/validated
+      hash: md5
+      md5: 077ca43b8069b421b2cba4ab00be81f1.dir
+      size: 236097598
+      nfiles: 3
+    - path: src/tripduration/config.py
+      hash: md5
+      md5: f61f1f0681aa88484ea4a4792f3c0793
+      size: 1927
+    - path: src/tripduration/features.py
+      hash: md5
+      md5: 9ae2d0082ff3f53e4b445abd4dc5466e
+      size: 4430
+    - path: src/tripduration/prepare.py
+      hash: md5
+      md5: 202ef32b000d5e8754ae95887865dd96
+      size: 5916
+    - path: src/tripduration/schema.py
+      hash: md5
+      md5: 566549c63bf8888eb041b312f33836eb
+      size: 1122
+    params:
+      params.yaml:
+        seed: 42
+        split:
+          start_month: 2024-10
+          train_window_max: 6
+          train_sample_frac: 1.0
+    outs:
+    - path: data/processed
+      hash: md5
+      md5: 271882cc7a3e9998ef8ddfb3fbc3c744.dir
+      size: 178314410
+      nfiles: 3
+    - path: reports/prepare.json
+      hash: md5
+      md5: d2cf7ae6d975a1bdbdfd1b437c95120c
+      size: 665

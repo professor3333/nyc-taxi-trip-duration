@@ -6,7 +6,7 @@ Tick a line only when its proof command passes, not when the code is written.
 |---|-------|-------|------|
 | 0 | Foundation: repo, uv, layout, Makefile, ci.yml (lint + tests) | `make lint && make test` green locally and in CI; a deliberate failure goes red in CI | [x] |
 | 1 | Data in, versioned: ingest + schema normalisation, zone reference, DVC + S3 remote, budget alert first | `dvc pull` on a second checkout retrieves raw months; ingest tests green | [x] local remote; S3 pending AWS |
-| 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [ ] |
+| 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [x] |
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [ ] |
 | 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [ ] |
 | 5 | Serving: FastAPI, validation, JSON logs, /health /ready, fallback, parity test, Dockerfile, api in Compose | Compose stack serves; fuzz finds no 500; /health degraded when model removed (exit 5 local) | [ ] |
@@ -34,3 +34,6 @@ Tick a line only when its proof command passes, not when the code is written.
 
 - ADR-0003 (split) and ADR-0002 (validity) accepted.
 - `validate` stage in `dvc.yaml`: 11.15M rows -> 10.73M in 14 s; per-rule counts in `reports/validation/`.
+- ADR-0001 (formulation), ADR-0005 (features), ADR-0009 (time semantics) accepted; `docs/leakage_audit.md`.
+- `prepare` stage: split derived per ADR-0003 (train 2024-10 / val 2024-11 / test 2024-12), 12 features from centroids + calendar, post-trip columns dropped and asserted absent. 22 s. `data/processed/{train,val,test}.parquet` 3.69M / 3.50M / 3.53M rows.
+- Proof: `dvc repro` green end to end; 58 tests.
