@@ -60,6 +60,21 @@ group); the GitHub OIDC role gains `lambda:InvokeFunctionUrl` and
 checking. `LAMBDA_URL_AUTH_TYPE` in `deploy/aws/env.sh` flips it back to
 `NONE` if the account ever allows it.
 
+**2b. Automated checks call the Lambda API, not the Function URL.** With
+`AWS_IAM` auth the URL answers the **account root** and nobody else: a plain
+IAM user with `lambda:InvokeFunctionUrl` on the function, and the GitHub OIDC
+role with the same permission plus a matching resource-policy statement, both
+get `403 Forbidden` — while `aws iam simulate-principal-policy` says
+`allowed`. Two independent principals, correct policies, IAM's own simulator
+disagreeing with the edge: the restriction is in the account's Function URL
+handling, not in our configuration. So `deploy.yml` and `monitor.yml` use
+`deploy_check.py --invoke <function>`, which sends a Function-URL-shaped
+event (payload format 2.0) through the Lambda Invoke API. Same image, same
+Web Adapter, same routes and handlers; the only thing not exercised is the
+URL edge itself, which is stated here rather than hidden. The URL remains for
+interactive use by the account owner. If the account restriction lifts,
+`--url … --sigv4` (still supported) is the better check.
+
 **3. Reserved concurrency not set.** The account's total concurrency limit is
 **10**, and AWS refuses a reservation that would leave fewer than 10
 unreserved. The account limit is itself the cap, which is what the
