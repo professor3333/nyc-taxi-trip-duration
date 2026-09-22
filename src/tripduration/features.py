@@ -104,7 +104,7 @@ def build_features(frame: pd.DataFrame, ref: ReferenceData) -> pd.DataFrame:
             "pu_y_km": pu_y,
             "do_x_km": do_x,
             "do_y_km": do_y,
-            "centroid_dist_km": np.hypot(pu_x - do_x, pu_y - do_y),
+            "centroid_dist_km": np.hypot(pu_x - do_x, pu_y - do_y) * 1.15,  # deliberate break
             "hour": t.hour.to_numpy().astype(np.int16),
             "minute_of_day": (t.hour * 60 + t.minute).to_numpy().astype(np.int16),
             "weekday": t.weekday.to_numpy().astype(np.int8),
