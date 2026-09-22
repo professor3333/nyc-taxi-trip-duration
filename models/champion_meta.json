@@ -1,1 +1,56 @@
-{"feature_columns": ["a", "b"], "train_months": ["2024-10"]}
+{
+  "categorical_features": [
+    "pu_borough",
+    "do_borough"
+  ],
+  "fallback_params": {
+    "hour_bucket_edges": [
+      0,
+      6,
+      10,
+      16,
+      20,
+      24
+    ],
+    "min_count": 5
+  },
+  "feature_columns": [
+    "pu_x_km",
+    "pu_y_km",
+    "do_x_km",
+    "do_y_km",
+    "centroid_dist_km",
+    "hour",
+    "minute_of_day",
+    "weekday",
+    "is_weekend",
+    "is_holiday",
+    "pu_borough",
+    "do_borough"
+  ],
+  "git_sha": "03db5e7e4fc1444f0a1c404202e1175d05e23191",
+  "mlflow_run_id": "c0d3d58063284bd2a5db75fd3ad2b11a",
+  "model_params": {
+    "l2_regularization": 1.0,
+    "learning_rate": 0.1,
+    "loss": "absolute_error",
+    "max_bins": 255,
+    "max_iter": 200,
+    "max_leaf_nodes": 63,
+    "min_samples_leaf": 200
+  },
+  "n_threads": 4,
+  "params_hash": "04670acdcce37a00",
+  "python_version": "3.12.6",
+  "seed": 42,
+  "sklearn_version": "1.9.1",
+  "target": "duration_min",
+  "test_month": "2024-12",
+  "train_months": [
+    "2024-10"
+  ],
+  "train_rows": 3692603,
+  "val_mae_fallback": 4.491058308207294,
+  "val_mae_model": 3.998456753893685,
+  "val_month": "2024-11"
+}
