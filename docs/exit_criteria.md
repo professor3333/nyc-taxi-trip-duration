@@ -63,7 +63,7 @@ policy prohibits the merge"*, `mergeStateStatus: BLOCKED`. The fix commit on
 the same PR turned CI green and the PR mergeable. Rehearsal without
 protection: PR #1 (runs 35686689059 red → 35686734906 green).
 
-## 4. Cost is known — pending (Phase 8)
+## 4. Cost is known — pending: `docs/cost.md` holds the plan and list prices; the Cost Explorer number needs an account and a month of running
 ## 5. Malformed input never 500s and is logged — MET locally; live pending (Phase 7)
 
 **Proof (local).** `tests/test_api.py`: 11 parametrised malformed bodies
@@ -76,7 +76,14 @@ request_id, model_version, method, path, status, latency_ms, model_kind`,
 and a WARNING `validation_error` line per rejected request. Container run
 2026-09-22 (image `tripduration:champion`): zone 264 → 422, `garbage` body →
 422, both logged as WARNING; see PR #10.
-## 6. Scheduled retraining has run — pending (Phase 7)
+## 6. Scheduled retraining has run — cycle proven locally; Actions run pending
+
+The exact steps of `retrain.yml` ran by hand on 2026-09-22 for 2025-01:
+ingest → `dvc add` → `dvc repro` → `prospective_eval.py` → candidate commit
+`f6b2f155` → `make register` (v3) → `make promote` via the prospective gate.
+`reports/monitoring/2025-01.json`: champion v1 MAE 3.841 (0.82× promotion-time),
+bias +1.47 min after congestion pricing, verdict ok. The `retrain/YYYY-MM` PR
+opened by Actions needs the S3 remote.
 ## 7. Compose runs API + MLflow + DB — MET
 
 `docker compose up -d --wait` brings up `postgres` (healthy), `mlflow`
@@ -86,5 +93,5 @@ ran on 2026-09-22: `/health` reported `"model_version": "v1"` after
 `fetch_champion.py` pulled v1's artefacts by md5 from the DVC remote at commit
 `49fb1c0d`, while the working tree held v2's model (which the md5 check
 correctly reported as `unregistered:…`).
-## 8. Structured logging verified in CloudWatch — pending (Phase 7)
+## 8. Structured logging verified in CloudWatch — pending; verified locally in the container and in CI (`docker logs`, one JSON `request` line per call with the §10 fields)
 ## 9. Owner can explain and rebuild every core file — owner's checkpoint

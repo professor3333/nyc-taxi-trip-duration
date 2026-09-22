@@ -48,3 +48,6 @@ api:                        # ADR-0009 — accepted departure_time window (inclu
   departure_min: "2024-01-01"
   departure_max: "2027-12-31"
   max_batch: 100
+
+monitoring:                 # ADR-0011 — prospective evaluation of the champion on each new month
+  mae_degradation_ratio: 1.15   # alert when prospective MAE > promotion-time test MAE x this

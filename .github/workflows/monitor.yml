@@ -1,0 +1,55 @@
+name: monitor
+
+# Daily: the live service must be up, not degraded, and serving the champion
+# version main says it should. Opens (or updates) one issue labelled
+# `service-health` on failure and closes it when healthy again.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen -q
+
+      - name: Check the live service
+        id: check
+        continue-on-error: true
+        run: |
+          uv run python scripts/deploy_check.py --url "${{ secrets.FUNCTION_URL }}" \
+            --expect-version "v$(jq -r .version models/champion.json)" --malformed 2>&1 | tee check.txt \
+            || echo "failed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update issue
+        if: steps.check.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "deploy_check failed on $(date -u +%FT%TZ):"
+            echo; echo '```'; cat check.txt; echo '```'
+            echo; echo "Runbook: docs/runbook.md#service-down-or-degraded"
+          } > body.md
+          N=$(gh issue list --label service-health --state open --json number -q '.[0].number')
+          if [ -n "$N" ]; then gh issue comment "$N" --body-file body.md
+          else gh issue create --title "Service unhealthy" --body-file body.md --label service-health \
+            || gh issue create --title "Service unhealthy" --body-file body.md; fi
+          exit 1
+
+      - name: Close issue when healthy
+        if: steps.check.outputs.failed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for N in $(gh issue list --label service-health --state open --json number -q '.[].number'); do
+            gh issue close "$N" --comment "Healthy again on $(date -u +%FT%TZ)."
+          done
