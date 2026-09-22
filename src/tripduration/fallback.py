@@ -15,6 +15,7 @@ needs only the three request fields plus the zone -> borough map.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,11 +59,25 @@ def _with_keys(
     )
 
 
+def table_version(table: pd.DataFrame) -> str:
+    """A content-derived version for the baseline: same medians, same version.
+
+    The fallback ships in every image and can serve on its own, so it needs an
+    identity independent of whichever model it accompanies.
+    """
+    payload = table.sort_values(COLUMNS[:-2], na_position="first").to_csv(index=False)
+    return "fb-" + hashlib.sha256(payload.encode()).hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class FallbackTable:
     table: pd.DataFrame  # COLUMNS
     edges: tuple[int, ...]
     min_count: int
+
+    @property
+    def version(self) -> str:
+        return table_version(self.table)
 
     @classmethod
     def fit(

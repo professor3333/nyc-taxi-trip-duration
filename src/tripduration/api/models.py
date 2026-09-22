@@ -40,6 +40,7 @@ class PredictResponse(BaseModel):
     duration_min: float
     model_version: str
     model_kind: Literal["model", "fallback"]
+    fallback_version: str
     request_id: str
 
 
@@ -52,16 +53,55 @@ class BatchPredictResponse(BaseModel):
     predictions: list[float]
     model_version: str
     model_kind: Literal["model", "fallback"]
+    fallback_version: str
     request_id: str
 
 
 class HealthResponse(BaseModel):
-    status: Literal["ok", "degraded"]
+    """`/health` and `/health/ready`. `/health/live` uses LiveResponse."""
+
+    status: Literal["ok", "degraded", "unavailable"]
     model_version: str
-    model_kind: Literal["model", "fallback"]
+    model_kind: Literal["model", "fallback", "none"]
+    fallback_version: str
     loaded_at: str
     git_sha: str
     load_error: str | None = None
+    fallback_error: str | None = None
+
+
+class LiveResponse(BaseModel):
+    """`/health/live`: the process answers. Nothing about the model."""
+
+    status: Literal["live"] = "live"
+    app_version: str
+    uptime_s: float
+
+
+class ReadyResponse(BaseModel):
+    """`/health/ready`: a prediction was just computed for a fixed request."""
+
+    ready: bool
+    reason: str | None = None
+    model_version: str
+    model_kind: Literal["model", "fallback", "none"]
+    fixture_duration_min: float | None = None
+    request_id: str
+
+
+class VersionResponse(BaseModel):
+    """Everything a caller needs to say which software and which model answered."""
+
+    app_version: str
+    api_version: str
+    model_version: str
+    model_kind: Literal["model", "fallback", "none"]
+    fallback_version: str
+    champion_version: str | None
+    git_sha: str
+    train_months: list[str]
+    feature_count: int
+    loaded_at: str
 
 
 class ErrorDetail(BaseModel):

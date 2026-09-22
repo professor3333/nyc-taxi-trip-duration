@@ -100,3 +100,12 @@ Tick a line only when its proof command passes, not when the code is written.
 - Demonstrated live: rolled back v3 -> v1, deploy.yml green, live matched v1's file exactly (0.0000 min / 80 rows) and failed against v3's (25 rows, max 7.39 min). Restored v3 afterwards.
 - Found and measured: predictions are **architecture-sensitive**. Identical model bytes and features give 24.9627 (arm64) vs 25.3806 (linux/amd64); across the grid mean 0.043 min, max 0.597 min, <=1.98%. Recorded in champion.json, ADR-scale note in docs/reproducibility.md and docs/model_card.md; live tolerance set to 1.0 min with that justification.
 - `promote.py --refresh` rewrites the current champion's record without an alias change (the gate correctly refuses promoting a version to itself). 117 tests.
+
+## Resilient API milestone — 2026-09-22
+
+- Endpoints now match the contract: `POST /predict` (duration, model version, fallback status, fallback version), `GET /health/live`, `GET /health/ready`, `GET /version`. `/health` and `/ready` stay as deprecated aliases so a rollout never 404s a probe.
+- The packaged baseline has its own version: `fb-<sha of its medians>` (`fb-027e815daa71`), independent of any model, reported by `/predict` and `/version`.
+- **Behaviour change:** with neither model nor fallback the service no longer exits. `/health/live` 200, `/health/ready` 503, `/predict` 503 `{"error":"unavailable"}` with `retry-after: 30`, process alive so `/version` and logs stay reachable. Malformed input is still 422, never 503. Documented in `docs/api.md` as superseding the earlier fail-fast design.
+- `docs/api.md`: the endpoint table, validation table, the departure-time timezone policy (ADR-0009) in one place, the degradation matrix and the log shape.
+- Probes repointed: Dockerfile `AWS_LWA_READINESS_CHECK_PATH=/health/live`, Compose healthcheck, `deploy_check` (which now also checks `/version`).
+- Verified on the Compose stack (api + mlflow + postgres, all healthy): four endpoints answer; four malformed shapes -> 422; tz-aware 22:30Z == naive 17:30; model removed -> fallback with `fallback-v3`; both removed -> 503 and the container still running. 119 tests.

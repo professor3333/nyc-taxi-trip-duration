@@ -246,6 +246,12 @@ def main() -> int:
         if not ok:
             failures.append(name)
 
+    status, live, ms = call(f"{base}/health/live", sigv4=sign, function=fn)
+    check("health/live", status == 200, f"HTTP {status} in {ms:.0f} ms {_short(live)}")
+
+    status, ver, _ = call(f"{base}/version", sigv4=sign, function=fn)
+    check("version", status == 200, _short(ver))
+
     status, health, ms = call(f"{base}/health", sigv4=sign, function=fn)
     check("health reachable", status == 200, f"HTTP {status} in {ms:.0f} ms")
     if isinstance(health, dict):
@@ -262,7 +268,7 @@ def main() -> int:
                 f"{health.get('model_version')} (expected {args.expect_version})",
             )
 
-    status, ready, ms = call(f"{base}/ready", sigv4=sign, function=fn)
+    status, ready, ms = call(f"{base}/health/ready", sigv4=sign, function=fn)
     check(
         "ready",
         status == 200,
