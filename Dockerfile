@@ -45,7 +45,7 @@ COPY --chown=app:app params.yaml ./params.yaml
 COPY --chown=app:app configs/holidays.csv ./configs/holidays.csv
 COPY --chown=app:app data/reference/zone_centroids.csv ./data/reference/zone_centroids.csv
 COPY --chown=app:app ${MODELS_SRC}/model.pkl ${MODELS_SRC}/fallback_table.parquet ${MODELS_SRC}/model_meta.json ./models/
-COPY --chown=app:app models/champion.json ./models/champion.json
+COPY --chown=app:app ${MODELS_SRC}/champion.json ./models/champion.json
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
