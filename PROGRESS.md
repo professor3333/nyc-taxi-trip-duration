@@ -5,7 +5,7 @@ Tick a line only when its proof command passes, not when the code is written.
 | # | Phase | Proof | Done |
 |---|-------|-------|------|
 | 0 | Foundation: repo, uv, layout, Makefile, ci.yml (lint + tests) | `make lint && make test` green locally and in CI; a deliberate failure goes red in CI | [x] |
-| 1 | Data in, versioned: ingest + schema normalisation, zone reference, DVC + S3 remote, budget alert first | `dvc pull` on a second checkout retrieves raw months; ingest tests green | [ ] |
+| 1 | Data in, versioned: ingest + schema normalisation, zone reference, DVC + S3 remote, budget alert first | `dvc pull` on a second checkout retrieves raw months; ingest tests green | [x] local remote; S3 pending AWS |
 | 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [ ] |
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [ ] |
 | 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [ ] |
@@ -23,3 +23,14 @@ Tick a line only when its proof command passes, not when the code is written.
 - `ci.yml`: push to main + pull_request; `make setup && make lint && make test` on ubuntu-latest, actions pinned to major tags.
 - Proof: first `main` run green (run 35686636777); PR #1 pushed a deliberately failing test -> red (run 35686689059), then the fix -> green.
 - Follow-up: `actions/checkout@v4` and `setup-uv@v6` target Node 20 (deprecated); bump majors when convenient.
+
+## Phase 1 log
+
+- Ingest stores TLC bytes untouched (`data/raw/`), checks schema drift at download, retries, HEAD-based idempotency, republish detection. Reports in `reports/ingest/`.
+- DVC: `dvc init`; raw months 2024-10/11/12 + zone lookup tracked; remote is per-machine (`.dvc/config.local`), local directory until the AWS budget alert + bucket exist.
+- Proof: cache wiped -> `dvc pull` -> `make verify-raw` ok; `git checkout da5d545 && dvc checkout` recovered the 2024-10-only snapshot, md5 == TLC's.
+
+## Phase 2 log
+
+- ADR-0003 (split) and ADR-0002 (validity) accepted.
+- `validate` stage in `dvc.yaml`: 11.15M rows -> 10.73M in 14 s; per-rule counts in `reports/validation/`.

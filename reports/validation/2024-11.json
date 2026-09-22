@@ -1,0 +1,76 @@
+{
+  "dst_transition_days": [
+    "2024-11-03"
+  ],
+  "flagged": {
+    "dst_transition_window": 22127,
+    "duplicate_trip": 53244,
+    "duration_too_long": 2130,
+    "duration_too_short": 44040,
+    "null_timestamp": 0,
+    "pickup_outside_month": 50,
+    "zone_invalid": 32984
+  },
+  "missing_optional": [
+    "cbd_congestion_fee"
+  ],
+  "month": "2024-11",
+  "params": {
+    "dedupe_key": [
+      "vendor_id",
+      "tpep_pickup_datetime",
+      "tpep_dropoff_datetime",
+      "pu_location_id",
+      "do_location_id"
+    ],
+    "dst_window_hours": 3,
+    "max_duration_min": 180,
+    "min_duration_s": 60,
+    "timezone": "America/New_York",
+    "zone_max": 263,
+    "zone_min": 1
+  },
+  "rejected": {
+    "dst_transition_window": 21918,
+    "duplicate_trip": 46270,
+    "duration_too_long": 1944,
+    "duration_too_short": 40197,
+    "null_timestamp": 0,
+    "pickup_outside_month": 50,
+    "zone_invalid": 32984
+  },
+  "rows_in": 3646369,
+  "rows_out": 3503006,
+  "rows_rejected": 143363,
+  "rules_in_order": [
+    "null_timestamp",
+    "pickup_outside_month",
+    "zone_invalid",
+    "dst_transition_window",
+    "duration_too_short",
+    "duration_too_long",
+    "duplicate_trip"
+  ],
+  "source": "data/raw/yellow/2024-11.parquet",
+  "source_schema": {
+    "Airport_fee": "double",
+    "DOLocationID": "int32",
+    "PULocationID": "int32",
+    "RatecodeID": "int64",
+    "VendorID": "int32",
+    "congestion_surcharge": "double",
+    "extra": "double",
+    "fare_amount": "double",
+    "improvement_surcharge": "double",
+    "mta_tax": "double",
+    "passenger_count": "int64",
+    "payment_type": "int64",
+    "store_and_fwd_flag": "large_string",
+    "tip_amount": "double",
+    "tolls_amount": "double",
+    "total_amount": "double",
+    "tpep_dropoff_datetime": "timestamp[us]",
+    "tpep_pickup_datetime": "timestamp[us]",
+    "trip_distance": "double"
+  }
+}

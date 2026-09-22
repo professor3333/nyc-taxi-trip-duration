@@ -1,0 +1,29 @@
+# Every knob the pipeline reads. `dvc params diff` compares two commits.
+
+seed: 42
+n_threads: 4
+
+data:
+  service: yellow
+  raw_dir: data/raw/yellow
+  validated_dir: data/validated
+  reference_dir: data/reference
+  timezone: America/New_York
+
+split:                      # ADR-0003
+  start_month: "2024-10"    # anchor of the contiguous month sequence M
+  train_window_max: 6       # expanding warm-up, then rolling
+  train_sample_frac: 1.0    # changing this is a recorded decision
+
+validity:                   # ADR-0002 — every rule here has a rejection counter
+  zone_min: 1
+  zone_max: 263             # 264 = Unknown, 265 = Outside NYC: the API rejects both
+  min_duration_s: 60
+  max_duration_min: 180
+  dst_window_hours: 3       # drop trips touching [00:00, 03:00) local on a DST transition day
+  dedupe_key:               # identity of a trip; no post-trip column
+    - vendor_id
+    - tpep_pickup_datetime
+    - tpep_dropoff_datetime
+    - pu_location_id
+    - do_location_id
