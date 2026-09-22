@@ -1,15 +1,15 @@
 {
-  "fallback_md5": "16cc9d09ae9eab8dc0e385036719e405",
-  "git_sha": "49fb1c0dee239a8f55462678fc5f1618497ffccb",
-  "mae_test_fallback": 5.111258,
-  "mae_test_model": 4.688721,
-  "model_md5": "2c521291dc8cef52dcca29988bb00699",
+  "fallback_md5": "9ef514fc304a0a0b8bab7f73fabb3d72",
+  "git_sha": "f6b2f1554b697a5b90d381c1f78c9b9b6988140b",
+  "mae_test_fallback": 3.994559,
+  "mae_test_model": 3.789785,
+  "model_md5": "f575719b14e7a25e0896c29436ba0fe3",
   "model_name": "nyc-taxi-trip-duration",
-  "previous_version": 3,
-  "promoted_at": "2026-09-22T12:41:28+00:00",
-  "reason": "exit criterion 2 live: rollback redeploys the previous champion",
+  "previous_version": 1,
+  "promoted_at": "2026-09-22T13:30:25+00:00",
+  "reason": "restore v3 after the live rollback proof; test MAE 3.790 on 2025-01",
   "reference_md5": "79c1bb833dae873054bef4867a70914e",
-  "run_id": "502fe6e4792644b1a5b141b4c163cf9f",
-  "test_month": "2024-12",
-  "version": 1
+  "run_id": "c7ed089456734193b443ec26c7891c4f",
+  "test_month": "2025-01",
+  "version": 3
 }
