@@ -97,6 +97,18 @@ def registry(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def _rollback(r: dict[str, Any], **kw: Any) -> ChampionState:
+    return reg.rollback(
+        r["uri"],
+        reason=kw.pop("reason", "test"),
+        model_name=MODEL,
+        champion_file=r["file"],
+        log_path=r["log"],
+        meta_file=r["meta"],
+        **kw,
+    )
+
+
 def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
     return reg.promote(
         r["uri"],
@@ -105,6 +117,7 @@ def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
         model_name=MODEL,
         champion_file=r["file"],
         log_path=r["log"],
+        meta_file=r["meta"],
         **kw,
     )
 
@@ -125,13 +138,7 @@ def test_promote_then_rollback_round_trip(registry: dict[str, Any]) -> None:
     assert reg.resolve_alias(r["client"], "challenger", MODEL) == v1
     assert json.loads(r["file"].read_text())["version"] == v2
 
-    s3 = reg.rollback(
-        r["uri"],
-        reason="deploy check failed",
-        model_name=MODEL,
-        champion_file=r["file"],
-        log_path=r["log"],
-    )
+    s3 = _rollback(r, reason="deploy check failed")
     assert s3.version == v1 and s3.previous_version == v2
     assert reg.resolve_alias(r["client"], "champion", MODEL) == v1
     assert reg.resolve_alias(r["client"], "challenger", MODEL) == v2
@@ -166,26 +173,14 @@ def test_promote_refuses_when_alias_and_file_disagree(registry: dict[str, Any]) 
     with pytest.raises(RegistryError, match="reconcile"):
         _promote(r, v2)
     with pytest.raises(RegistryError, match="reconcile"):
-        reg.rollback(
-            r["uri"],
-            reason="x",
-            model_name=MODEL,
-            champion_file=r["file"],
-            log_path=r["log"],
-        )
+        _rollback(r, reason="x")
 
 
 def test_rollback_refuses_without_previous(registry: dict[str, Any]) -> None:
     r = registry
     _promote(r, r["add"]())
     with pytest.raises(RegistryError, match="no previous_version"):
-        reg.rollback(
-            r["uri"],
-            reason="x",
-            model_name=MODEL,
-            champion_file=r["file"],
-            log_path=r["log"],
-        )
+        _rollback(r, reason="x")
 
 
 def test_register_refuses_dirty_tree(
