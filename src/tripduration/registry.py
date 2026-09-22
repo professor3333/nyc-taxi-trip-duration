@@ -213,8 +213,29 @@ class Gate:
     reasons: tuple[str, ...]
 
 
-def promotion_gate(challenger: dict[str, str], champion: dict[str, str] | None) -> Gate:
-    """ADR-0007: same test month, lower MAE than champion, beats fallback."""
+def champion_mae_on(
+    month: str, champion_version: int, monitoring_dir: Path = Path("reports/monitoring")
+) -> float | None:
+    """The champion's *prospective* MAE on ``month`` (scripts/prospective_eval.py)."""
+    path = monitoring_dir / f"{month}.json"
+    if not path.exists():
+        return None
+    rep = json.loads(path.read_text())
+    if int(rep.get("champion_version", -1)) != champion_version:
+        return None
+    return float(rep["model"]["mae"])
+
+
+def promotion_gate(
+    challenger: dict[str, str],
+    champion: dict[str, str] | None,
+    champion_prospective_mae: float | None = None,
+) -> Gate:
+    """ADR-0007: lower MAE than the champion on the *same* month, beats fallback.
+
+    When the test months differ, the champion's number for the challenger's
+    test month is its prospective evaluation, if one exists.
+    """
     reasons: list[str] = []
     c_model = float(challenger["mae_test_model"])
     c_fb = float(challenger["mae_test_fallback"])
@@ -223,17 +244,22 @@ def promotion_gate(challenger: dict[str, str], champion: dict[str, str] | None) 
             f"challenger MAE {c_model:.4f} does not beat fallback {c_fb:.4f}"
         )
     if champion is not None:
-        if champion["test_month"] != challenger["test_month"]:
-            reasons.append(
-                f"test months differ: champion {champion['test_month']} vs "
-                f"challenger {challenger['test_month']}"
-            )
+        if champion["test_month"] == challenger["test_month"]:
+            k_model: float | None = float(champion["mae_test_model"])
+            basis = f"champion on {champion['test_month']}"
         else:
-            k_model = float(champion["mae_test_model"])
-            if not c_model < k_model:
-                reasons.append(
-                    f"challenger MAE {c_model:.4f} not below champion {k_model:.4f}"
-                )
+            k_model = champion_prospective_mae
+            basis = f"champion prospective on {challenger['test_month']}"
+        if k_model is None:
+            reasons.append(
+                f"test months differ: champion {champion['test_month']} vs challenger "
+                f"{challenger['test_month']}, and no prospective evaluation of the "
+                f"champion on {challenger['test_month']} exists (prospective_eval.py)"
+            )
+        elif not c_model < k_model:
+            reasons.append(
+                f"challenger MAE {c_model:.4f} not below {basis} {k_model:.4f}"
+            )
     return Gate(passed=not reasons, reasons=tuple(reasons))
 
 
@@ -270,6 +296,7 @@ def promote(
     model_name: str = MODEL_NAME,
     champion_file: Path = CHAMPION_FILE,
     log_path: Path = PROMOTIONS_LOG,
+    monitoring_dir: Path = Path("reports/monitoring"),
 ) -> ChampionState:
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
@@ -278,7 +305,12 @@ def promote(
 
     chal = version_tags(client, version, model_name)
     champ = version_tags(client, current.version, model_name) if current else None
-    gate = promotion_gate(chal, champ)
+    prospective = (
+        champion_mae_on(chal["test_month"], current.version, monitoring_dir)
+        if current and champ and champ["test_month"] != chal["test_month"]
+        else None
+    )
+    gate = promotion_gate(chal, champ, prospective)
     if not gate.passed and not force:
         raise RegistryError("promotion gate failed: " + "; ".join(gate.reasons))
     if not gate.passed:

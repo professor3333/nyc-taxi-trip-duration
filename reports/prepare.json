@@ -1,16 +1,17 @@
 {
   "split": {
     "train": [
-      "2024-10"
+      "2024-10",
+      "2024-11"
     ],
-    "val": "2024-11",
-    "test": "2024-12"
+    "val": "2024-12",
+    "test": "2025-01"
   },
-  "train_month_count": 1,
+  "train_month_count": 2,
   "rows": {
-    "train": 3692603,
-    "val": 3503006,
-    "test": 3532547
+    "train": 7195609,
+    "val": 3532547,
+    "test": 3361429
   },
   "feature_columns": [
     "pu_x_km",

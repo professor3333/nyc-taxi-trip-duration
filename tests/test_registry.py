@@ -52,6 +52,16 @@ def test_gate_requires_same_month_and_lower_mae() -> None:
     assert not g.passed and "test months differ" in g.reasons[0]
 
 
+def test_gate_uses_champion_prospective_mae_when_months_differ() -> None:
+    champ = _tags(mae_test_model=4.7, test_month="2024-12")
+    chal = _tags(mae_test_model=5.0, mae_test_fallback=5.6, test_month="2025-01")
+    assert promotion_gate(chal, champ, champion_prospective_mae=5.3).passed
+    g = promotion_gate(chal, champ, champion_prospective_mae=4.9)
+    assert not g.passed and "prospective on 2025-01" in g.reasons[0]
+    g = promotion_gate(chal, champ, None)
+    assert not g.passed and "no prospective evaluation" in g.reasons[0]
+
+
 # --- against a real (sqlite) registry ------------------------------------------------
 
 
