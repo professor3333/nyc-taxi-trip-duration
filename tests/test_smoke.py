@@ -4,4 +4,4 @@ import tripduration
 
 
 def test_package_imports() -> None:
-    assert tripduration.__version__ == "0.1.0"
+    assert tripduration.__version__ == "9.9.9"  # deliberate break: proves CI goes red
