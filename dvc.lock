@@ -18,8 +18,8 @@ stages:
       size: 3396
     - path: src/tripduration/ingest.py
       hash: md5
-      md5: 7bee6decce46ece5308aa9f9dab85d2a
-      size: 17426
+      md5: 2939ea0e1ae6bd46bd4c6abe6bef9027
+      size: 18000
     - path: src/tripduration/validate.py
       hash: md5
       md5: 08a4e15f1b97f4565ac5b34a44a2e95f
@@ -138,8 +138,8 @@ stages:
       size: 3396
     - path: src/tripduration/fallback.py
       hash: md5
-      md5: e351f4498784283c84c10d0a1f87f96e
-      size: 5233
+      md5: 7987d5192672d3766ef3e12f9f27fc98
+      size: 5766
     - path: src/tripduration/features.py
       hash: md5
       md5: 9ae2d0082ff3f53e4b445abd4dc5466e
@@ -182,7 +182,7 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: a9d65bda01aee485d8fee0440feef534
+      md5: ad9023781f7d84439417d5a9bea397d2
       size: 5755
   evaluate:
     cmd: uv run python -m tripduration.evaluate
@@ -213,7 +213,7 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: a9d65bda01aee485d8fee0440feef534
+      md5: ad9023781f7d84439417d5a9bea397d2
       size: 5755
     - path: src/tripduration/evaluate.py
       hash: md5
@@ -221,8 +221,8 @@ stages:
       size: 8429
     - path: src/tripduration/fallback.py
       hash: md5
-      md5: e351f4498784283c84c10d0a1f87f96e
-      size: 5233
+      md5: 7987d5192672d3766ef3e12f9f27fc98
+      size: 5766
     - path: src/tripduration/features.py
       hash: md5
       md5: 9ae2d0082ff3f53e4b445abd4dc5466e
@@ -230,7 +230,7 @@ stages:
     outs:
     - path: metrics/eval.json
       hash: md5
-      md5: f888eff923c3fd5227c9e570c1b282aa
+      md5: 341bca6bc949e0cd36a69d4112958e97
       size: 1644
     - path: reports/eval
       hash: md5
@@ -260,8 +260,8 @@ stages:
       size: 3396
     - path: src/tripduration/ingest.py
       hash: md5
-      md5: 7bee6decce46ece5308aa9f9dab85d2a
-      size: 17426
+      md5: 2939ea0e1ae6bd46bd4c6abe6bef9027
+      size: 18000
     - path: src/tripduration/quality.py
       hash: md5
       md5: 6a310662dde79b74607e1f805d09864d
