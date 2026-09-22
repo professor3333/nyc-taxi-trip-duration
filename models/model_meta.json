@@ -28,8 +28,8 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "95942abbc7cc3d50cdf35641252986333fc30202",
-  "mlflow_run_id": "b8abc0edb5a74e108cc92897733cdbbf",
+  "git_sha": "48660586ffcd17705b840c7930046f8484c5638f",
+  "mlflow_run_id": "4a1a436f013742cf978de9a4e91f36e8",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
@@ -40,7 +40,7 @@
     "min_samples_leaf": 200
   },
   "n_threads": 4,
-  "params_hash": "4f3d5ac916d0897f",
+  "params_hash": "2ea9cd9afc1ea1ae",
   "python_version": "3.12.6",
   "seed": 42,
   "sklearn_version": "1.9.1",

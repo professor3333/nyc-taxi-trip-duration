@@ -1,0 +1,50 @@
+{
+  "failed": {},
+  "months": [
+    "2024-10",
+    "2024-11",
+    "2024-12",
+    "2025-01"
+  ],
+  "passed": true,
+  "per_month": {
+    "2024-10": {
+      "p50_min": 13.867,
+      "p99_min": 71.6,
+      "reject_rate": 0.036822,
+      "removed_at_or_below_0_min": 1002,
+      "removed_over_180_min": 2045,
+      "rows_raw": 3833771,
+      "rows_valid": 3692603
+    },
+    "2024-11": {
+      "p50_min": 13.4,
+      "p99_min": 72.283,
+      "reject_rate": 0.039317,
+      "removed_at_or_below_0_min": 1861,
+      "removed_over_180_min": 2130,
+      "rows_raw": 3646369,
+      "rows_valid": 3503006
+    },
+    "2024-12": {
+      "p50_min": 13.8,
+      "p99_min": 77.9,
+      "reject_rate": 0.037026,
+      "removed_at_or_below_0_min": 1223,
+      "removed_over_180_min": 2168,
+      "rows_raw": 3668371,
+      "rows_valid": 3532547
+    },
+    "2025-01": {
+      "p50_min": 11.7,
+      "p99_min": 58.917,
+      "reject_rate": 0.032745,
+      "removed_at_or_below_0_min": 2051,
+      "removed_over_180_min": 1377,
+      "rows_raw": 3475226,
+      "rows_valid": 3361429
+    }
+  },
+  "rows_raw_total": 14623737,
+  "rows_valid_total": 14089585
+}

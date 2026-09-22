@@ -42,6 +42,17 @@ class FallbackParams:
 
 
 @dataclass(frozen=True)
+class QualityParams:
+    min_rows_raw: int
+    min_rows_valid: int
+    max_reject_rate: float
+    max_null_rate: dict[str, float]
+    duration_p50_bounds: tuple[float, float]
+    duration_p99_bounds: tuple[float, float]
+    max_share_single_zone_pair: float
+
+
+@dataclass(frozen=True)
 class Params:
     seed: int
     n_threads: int
@@ -49,6 +60,7 @@ class Params:
     split: SplitParams
     validity: ValidityParams
     fallback: FallbackParams
+    quality: QualityParams
     model: dict[str, Any]
     mlflow_experiment: str
     raw: dict[str, Any]
@@ -58,6 +70,7 @@ def load_params(path: Path = Path("params.yaml")) -> Params:
     with path.open() as fh:
         raw = yaml.safe_load(fh)
     d, s, v, fb = raw["data"], raw["split"], raw["validity"], raw["fallback"]
+    q = raw["quality"]
     return Params(
         seed=int(raw["seed"]),
         n_threads=int(raw["n_threads"]),
@@ -84,6 +97,21 @@ def load_params(path: Path = Path("params.yaml")) -> Params:
         fallback=FallbackParams(
             hour_bucket_edges=tuple(int(e) for e in fb["hour_bucket_edges"]),
             min_count=int(fb["min_count"]),
+        ),
+        quality=QualityParams(
+            min_rows_raw=int(q["min_rows_raw"]),
+            min_rows_valid=int(q["min_rows_valid"]),
+            max_reject_rate=float(q["max_reject_rate"]),
+            max_null_rate={k: float(x) for k, x in q["max_null_rate"].items()},
+            duration_p50_bounds=(
+                float(q["duration_p50_bounds"][0]),
+                float(q["duration_p50_bounds"][1]),
+            ),
+            duration_p99_bounds=(
+                float(q["duration_p99_bounds"][0]),
+                float(q["duration_p99_bounds"][1]),
+            ),
+            max_share_single_zone_pair=float(q["max_share_single_zone_pair"]),
         ),
         model=dict(raw["model"]),
         mlflow_experiment=str(raw["mlflow"]["experiment"]),

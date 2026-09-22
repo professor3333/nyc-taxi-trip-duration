@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback registry-status serve docker-build docker-build-champion docker-run
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback registry-status serve docker-build docker-build-champion docker-run
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -25,6 +25,9 @@ ingest-zones: ## Fetch the TLC zone lookup CSV
 
 verify-raw:   ## Recompute md5 of every raw file and compare with its ingest report
 	uv run python scripts/ingest.py --verify
+
+quality:      ## Data-quality report + acceptance rules (exits 1 if a month is unfit)
+	uv run python -m tripduration.quality
 
 pipeline:     ## Run every DVC stage whose inputs changed (validate -> prepare -> train -> evaluate)
 	uv run dvc repro

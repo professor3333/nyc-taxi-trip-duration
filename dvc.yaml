@@ -20,6 +20,25 @@ stages:
       - reports/validation:
           cache: false        # small JSON; lives in git so `git log` shows counts
 
+  quality:
+    desc: Data-quality report and acceptance rules; a failure stops the pipeline before train
+    cmd: uv run python -m tripduration.quality
+    deps:
+      - src/tripduration/quality.py
+      - src/tripduration/validate.py
+      - src/tripduration/ingest.py
+      - src/tripduration/config.py
+      - configs/schema_raw.yaml
+      - data/raw/yellow
+      - data/validated
+    params:
+      - data
+      - validity
+      - quality
+    outs:
+      - reports/quality:
+          cache: false
+
   prepare:
     desc: Derive ADR-0003 splits from validated months and build ADR-0005 features
     cmd: uv run python -m tripduration.prepare
@@ -31,6 +50,7 @@ stages:
       - configs/holidays.csv
       - data/reference/zone_centroids.csv
       - data/validated
+      - reports/quality        # prepare only runs when the acceptance rules passed
     params:
       - seed
       - split
