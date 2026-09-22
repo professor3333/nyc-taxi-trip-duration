@@ -15,6 +15,7 @@ MAE > 1.15 × promotion-time test MAE, or model loses to the fallback).
 | new month | champion | train months | promotion-time test MAE (month) | prospective MAE | ratio | bias (min) | fallback MAE | verdict |
 |---|---|---|---|---|---|---|---|---|
 | 2025-01 | v1 | 1 (2024-10) | 4.689 (2024-12) | **3.841** | 0.82 | +1.47 | 4.086 | ok |
+| 2025-02 | v3 | 2 (2024-10..11) | 3.790 (2025-01) | **3.623** | 0.96 | — | 3.915 | ok |
 
 Reading the first row: January 2025 trips were *faster* than the model
 expected (bias flipped from −1.82 on December to +1.47) — the Congestion
@@ -53,6 +54,15 @@ Fallback-mode requests:
 filter event = "request" and model_kind = "fallback" | stats count(*) by bin(1h)
 ```
 
-**State 2026-09-22:** no Lambda exists yet (no AWS account on the build
-machine); the CloudWatch pieces are scripted but unverified. The prospective
-row above was produced locally by the same commands `retrain.yml` runs.
+The 2025-02 row was produced by `retrain.yml` itself (dispatched run, PR #24),
+not by hand. It carries a lesson: the candidate trained on **three** months
+(2024-10..12) scored 3.756 on 2025-02, *worse* than champion v3 trained on
+two, so ADR-0007's gate refused promotion — more data is not automatically
+better when the extra month (December) is unlike the month being predicted.
+
+**State 2026-09-22:** live. Lambda `nyc-taxi-trip-duration` in us-east-1 with
+the log group, both metric filters and both alarms created by
+`deploy/aws/lambda.sh`; `monitor.yml` ran green against the deployed
+function. The alarms have not yet fired (no ERROR or fallback event since the
+degraded deployment was fixed), so their notification path is configured but
+unproven.
