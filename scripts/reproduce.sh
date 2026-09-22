@@ -4,6 +4,9 @@
 # Equal metrics can hide compensating differences; equal predictions on the
 # same fixed request grid cannot.
 #
+# Every stage is re-executed (`--force --no-run-cache`): restoring outputs
+# from DVC's run cache would prove only that the cache works.
+#
 # Compares, against the committed copies:
 #   reports/eval/fixture_predictions.csv   80 rows, PRED_TOLERANCE minutes
 #   metrics/eval.json                      every number, TOLERANCE
@@ -42,7 +45,10 @@ uv run dvc pull -q
 echo "== dvc repro (MLflow -> sqlite in the temp dir)"
 export MLFLOW_TRACKING_URI="sqlite:///$WORK/mlflow.db"
 export MLFLOW_DISABLE_AGENT_HINT=1
-time uv run dvc repro -q
+# --force --no-run-cache: every stage must actually execute. Without these,
+# DVC restores identical outputs from its run cache in about a second, which
+# proves only that the cache works — not that training reproduces.
+time uv run dvc repro --force --no-run-cache
 
 echo
 echo "== dvc metrics diff (committed vs reproduced)"
