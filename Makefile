@@ -64,7 +64,8 @@ docker-build: ## Build the serving image from local models/ (stamps git sha)
 
 docker-build-champion: ## Fetch champion artefacts from the DVC remote and build the deploy image
 	uv run python scripts/fetch_champion.py
-	docker build --build-arg MODELS_SRC=build/champion/models --build-arg GIT_SHA=$$(git rev-parse HEAD) \
+	docker build --build-arg MODELS_SRC=build/champion/models --build-arg REFERENCE_SRC=build/champion/reference \
+	  --build-arg GIT_SHA=$$(git rev-parse HEAD) \
 	  --build-arg MODEL_VERSION=v$$(uv run python -c "import json;print(json.load(open('models/champion.json'))['version'])") \
 	  -t tripduration:champion .
 

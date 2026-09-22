@@ -5,12 +5,10 @@ on:
     branches: [main]
   pull_request:
 
-# A newer push to the same branch/PR cancels the run still in progress.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The default token can only read the repo; nothing in CI needs to write.
 permissions:
   contents: read
 
@@ -18,18 +16,40 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
-      # setup-uv reads .python-version and installs that interpreter.
       - name: Install locked environment
         run: make setup
 
-      - name: Lint
+      - name: Lint (ruff check, ruff format --check, mypy)
         run: make lint
 
-      - name: Test
+      - name: Tests (incl. pipeline smoke on fixtures and the reproducibility test)
         run: make test
+
+      # The image needs model artefacts. CI has no DVC remote, so it trains a
+      # tiny model from the fixture months into build/ci-models and bakes that.
+      # This proves the Dockerfile and the serving path, not the model quality.
+      - name: Train fixture model for the container smoke
+        run: uv run python scripts/ci_fixture_model.py --out build/ci-models
+
+      - name: Docker build
+        run: |
+          docker build \
+            --build-arg MODELS_SRC=build/ci-models \
+            --build-arg REFERENCE_SRC=tests/fixtures \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg MODEL_VERSION=ci \
+            -t tripduration:ci .
+
+      - name: Container smoke (/health, /ready, /predict, malformed -> 422)
+        run: |
+          docker run -d --name api -p 8080:8080 tripduration:ci
+          for i in $(seq 1 30); do curl -sf localhost:8080/health && break; sleep 1; done
+          uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --models-dir build/ci-models --reference-dir tests/fixtures
+          docker logs api | tail -5
+          docker rm -f api

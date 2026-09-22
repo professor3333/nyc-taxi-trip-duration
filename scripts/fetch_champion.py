@@ -82,6 +82,25 @@ def main() -> int:
         sh("git", "show", f"{sha}:models/model_meta.json") + "\n"
     )
     shutil.copy(args.champion, out / "champion.json")
+    ref_out = out.parent / "reference"
+    ref_out.mkdir(exist_ok=True)
+    subprocess.check_call(
+        [
+            "uv",
+            "run",
+            "dvc",
+            "get",
+            args.repo,
+            "data/reference/zone_centroids.csv",
+            "--rev",
+            sha,
+            "-o",
+            str(ref_out / "zone_centroids.csv"),
+            "--force",
+            *remote,
+        ]
+    )
+    print(f"zone_centroids.csv fetched at {sha[:8]} into {ref_out}")
     print(f"champion v{champ['version']} (commit {sha[:8]}) fetched into {out}")
     return 0
 

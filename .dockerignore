@@ -12,4 +12,7 @@
 !models/model_meta.json
 !models/champion.json
 !build/champion/models/
+!build/ci-models/
+!build/champion/reference/
+!tests/fixtures/zone_centroids.csv
 **/__pycache__
