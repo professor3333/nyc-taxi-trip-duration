@@ -27,3 +27,19 @@ validity:                   # ADR-0002 — every rule here has a rejection count
     - tpep_dropoff_datetime
     - pu_location_id
     - do_location_id
+
+fallback:                   # ADR-0006 — zone-pair median lookup table (baseline + degraded path)
+  hour_bucket_edges: [0, 6, 10, 16, 20, 24]
+  min_count: 5              # cells with fewer training trips fall through to the next level
+
+model:                      # ADR-0006 — sklearn HistGradientBoostingRegressor
+  loss: absolute_error      # the primary metric is MAE
+  max_iter: 200
+  learning_rate: 0.1
+  max_leaf_nodes: 63
+  min_samples_leaf: 200
+  l2_regularization: 1.0
+  max_bins: 255
+
+mlflow:
+  experiment: nyc-taxi-trip-duration

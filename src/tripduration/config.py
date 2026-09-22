@@ -36,19 +36,28 @@ class ValidityParams:
 
 
 @dataclass(frozen=True)
+class FallbackParams:
+    hour_bucket_edges: tuple[int, ...]
+    min_count: int
+
+
+@dataclass(frozen=True)
 class Params:
     seed: int
     n_threads: int
     data: DataParams
     split: SplitParams
     validity: ValidityParams
+    fallback: FallbackParams
+    model: dict[str, Any]
+    mlflow_experiment: str
     raw: dict[str, Any]
 
 
 def load_params(path: Path = Path("params.yaml")) -> Params:
     with path.open() as fh:
         raw = yaml.safe_load(fh)
-    d, s, v = raw["data"], raw["split"], raw["validity"]
+    d, s, v, fb = raw["data"], raw["split"], raw["validity"], raw["fallback"]
     return Params(
         seed=int(raw["seed"]),
         n_threads=int(raw["n_threads"]),
@@ -72,5 +81,11 @@ def load_params(path: Path = Path("params.yaml")) -> Params:
             dst_window_hours=int(v["dst_window_hours"]),
             dedupe_key=tuple(v["dedupe_key"]),
         ),
+        fallback=FallbackParams(
+            hour_bucket_edges=tuple(int(e) for e in fb["hour_bucket_edges"]),
+            min_count=int(fb["min_count"]),
+        ),
+        model=dict(raw["model"]),
+        mlflow_experiment=str(raw["mlflow"]["experiment"]),
         raw=raw,
     )

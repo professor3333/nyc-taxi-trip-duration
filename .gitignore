@@ -15,9 +15,6 @@ dist/
 # Data and models are DVC-tracked. `dvc add` writes a .gitignore next to each
 # tracked file, so only .dvc pointers, READMEs and champion.json reach git.
 *.part
-models/*
-!models/champion.json
-!models/.gitignore
 
 # Local MLflow and SQLite state
 mlruns/

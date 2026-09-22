@@ -38,3 +38,49 @@ stages:
       - data/processed
       - reports/prepare.json:
           cache: false
+
+  train:
+    desc: Fit the fallback lookup table and the model on training months; log an MLflow run
+    cmd: uv run python -m tripduration.train
+    deps:
+      - src/tripduration/train.py
+      - src/tripduration/fallback.py
+      - src/tripduration/features.py
+      - src/tripduration/config.py
+      - configs/holidays.csv
+      - data/reference/zone_centroids.csv
+      - data/processed/train.parquet
+      - data/processed/val.parquet
+      - reports/prepare.json
+    params:
+      - seed
+      - n_threads
+      - fallback
+      - model
+      - mlflow
+    outs:
+      - models/model.pkl
+      - models/fallback_table.parquet
+      - models/model_meta.json:
+          cache: false
+
+  evaluate:
+    desc: Model and fallback metrics on validation and test months; MAE by hour and borough pair
+    cmd: uv run python -m tripduration.evaluate
+    deps:
+      - src/tripduration/evaluate.py
+      - src/tripduration/fallback.py
+      - src/tripduration/features.py
+      - configs/holidays.csv
+      - data/reference/zone_centroids.csv
+      - data/processed/val.parquet
+      - data/processed/test.parquet
+      - models/model.pkl
+      - models/fallback_table.parquet
+      - models/model_meta.json
+    metrics:
+      - metrics/eval.json:
+          cache: false
+    outs:
+      - reports/eval:
+          cache: false
