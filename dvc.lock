@@ -14,8 +14,8 @@ stages:
       nfiles: 7
     - path: src/tripduration/config.py
       hash: md5
-      md5: f61f1f0681aa88484ea4a4792f3c0793
-      size: 1927
+      md5: ef0f07c8c015d6a95f4c12b203ebe734
+      size: 2396
     - path: src/tripduration/ingest.py
       hash: md5
       md5: 7bee6decce46ece5308aa9f9dab85d2a
@@ -73,8 +73,8 @@ stages:
       nfiles: 3
     - path: src/tripduration/config.py
       hash: md5
-      md5: f61f1f0681aa88484ea4a4792f3c0793
-      size: 1927
+      md5: ef0f07c8c015d6a95f4c12b203ebe734
+      size: 2396
     - path: src/tripduration/features.py
       hash: md5
       md5: 9ae2d0082ff3f53e4b445abd4dc5466e
@@ -104,3 +104,131 @@ stages:
       hash: md5
       md5: d2cf7ae6d975a1bdbdfd1b437c95120c
       size: 665
+  train:
+    cmd: uv run python -m tripduration.train
+    deps:
+    - path: configs/holidays.csv
+      hash: md5
+      md5: 63cb7aadeda8ac77ddac8eafac4563f5
+      size: 1226
+    - path: data/processed/train.parquet
+      hash: md5
+      md5: 01040eae619ed7146bcacc3fe61eba6f
+      size: 61433060
+    - path: data/processed/val.parquet
+      hash: md5
+      md5: 4b279f5280e9a57a66f6ada97f5d922c
+      size: 58075148
+    - path: data/reference/zone_centroids.csv
+      hash: md5
+      md5: 79c1bb833dae873054bef4867a70914e
+      size: 15670
+    - path: reports/prepare.json
+      hash: md5
+      md5: d2cf7ae6d975a1bdbdfd1b437c95120c
+      size: 665
+    - path: src/tripduration/config.py
+      hash: md5
+      md5: ef0f07c8c015d6a95f4c12b203ebe734
+      size: 2396
+    - path: src/tripduration/fallback.py
+      hash: md5
+      md5: e351f4498784283c84c10d0a1f87f96e
+      size: 5233
+    - path: src/tripduration/features.py
+      hash: md5
+      md5: 9ae2d0082ff3f53e4b445abd4dc5466e
+      size: 4430
+    - path: src/tripduration/train.py
+      hash: md5
+      md5: 7a6c6b7b6c2bf457a77667978995393d
+      size: 7348
+    params:
+      params.yaml:
+        fallback:
+          hour_bucket_edges:
+          - 0
+          - 6
+          - 10
+          - 16
+          - 20
+          - 24
+          min_count: 5
+        mlflow:
+          experiment: nyc-taxi-trip-duration
+        model:
+          loss: absolute_error
+          max_iter: 200
+          learning_rate: 0.1
+          max_leaf_nodes: 63
+          min_samples_leaf: 200
+          l2_regularization: 1.0
+          max_bins: 255
+        n_threads: 4
+        seed: 42
+    outs:
+    - path: models/fallback_table.parquet
+      hash: md5
+      md5: 16cc9d09ae9eab8dc0e385036719e405
+      size: 215067
+    - path: models/model.pkl
+      hash: md5
+      md5: 2c521291dc8cef52dcca29988bb00699
+      size: 1470971
+    - path: models/model_meta.json
+      hash: md5
+      md5: 2c0be4ecef8164f17ee99cec476033c1
+      size: 1112
+  evaluate:
+    cmd: uv run python -m tripduration.evaluate
+    deps:
+    - path: configs/holidays.csv
+      hash: md5
+      md5: 63cb7aadeda8ac77ddac8eafac4563f5
+      size: 1226
+    - path: data/processed/test.parquet
+      hash: md5
+      md5: 9dbeb3a27f402936d7fc3bd16536193b
+      size: 58806202
+    - path: data/processed/val.parquet
+      hash: md5
+      md5: 4b279f5280e9a57a66f6ada97f5d922c
+      size: 58075148
+    - path: data/reference/zone_centroids.csv
+      hash: md5
+      md5: 79c1bb833dae873054bef4867a70914e
+      size: 15670
+    - path: models/fallback_table.parquet
+      hash: md5
+      md5: 16cc9d09ae9eab8dc0e385036719e405
+      size: 215067
+    - path: models/model.pkl
+      hash: md5
+      md5: 2c521291dc8cef52dcca29988bb00699
+      size: 1470971
+    - path: models/model_meta.json
+      hash: md5
+      md5: 2c0be4ecef8164f17ee99cec476033c1
+      size: 1112
+    - path: src/tripduration/evaluate.py
+      hash: md5
+      md5: bf3870c2841ed163c6ee0a68b56e75e5
+      size: 5894
+    - path: src/tripduration/fallback.py
+      hash: md5
+      md5: e351f4498784283c84c10d0a1f87f96e
+      size: 5233
+    - path: src/tripduration/features.py
+      hash: md5
+      md5: 9ae2d0082ff3f53e4b445abd4dc5466e
+      size: 4430
+    outs:
+    - path: metrics/eval.json
+      hash: md5
+      md5: bd2b86e1286f36b0e04738fa88f5a5f5
+      size: 1511
+    - path: reports/eval
+      hash: md5
+      md5: 505697a967d229da04f369442716e423.dir
+      size: 7992
+      nfiles: 4
