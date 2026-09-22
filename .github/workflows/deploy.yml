@@ -37,6 +37,13 @@ jobs:
           enable-cache: true
       - run: make setup
 
+      # A dispatched deploy must not be able to ship an untested tree. On a
+      # push to main these have already passed, and they take under a minute.
+      - name: Lint and fast tests
+        run: |
+          make lint
+          make test
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -60,6 +67,10 @@ jobs:
           REPO: ${{ secrets.ECR_REPOSITORY }}
         run: |
           IMAGE="$REGISTRY/$REPO"
+          # The repository is IMMUTABLE, so every tag must be unique: the
+          # release is <model version>-<commit>, never a bare vN that could
+          # later point somewhere else.
+          RELEASE="${{ steps.champ.outputs.version }}-${{ github.sha }}"
           # Lambda rejects OCI manifests, so buildx must emit Docker v2 media
           # types: --provenance=false --sbom=false + oci-mediatypes=false.
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
@@ -68,13 +79,30 @@ jobs:
             --build-arg REFERENCE_SRC=build/champion/reference \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg MODEL_VERSION=${{ steps.champ.outputs.version }} \
-            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:${{ steps.champ.outputs.version }}" .
-          echo "IMAGE_URI=$IMAGE:${{ github.sha }}" >> "$GITHUB_ENV"
+            -t "$IMAGE:$RELEASE" .
+          DIGEST=$(aws ecr describe-images --repository-name "$REPO" \
+            --image-ids imageTag="$RELEASE" --query 'imageDetails[0].imageDigest' --output text)
+          echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
+          echo "IMAGE_URI=$IMAGE@$DIGEST" >> "$GITHUB_ENV"
+          {
+            echo "### Release image"
+            echo "- tag: \`$RELEASE\` (immutable)"
+            echo "- digest: \`$DIGEST\`"
+            echo "- model: \`${{ steps.champ.outputs.version }}\` trained at \`${{ steps.champ.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Update Lambda and wait
+      - name: Update Lambda (by digest) and wait
         run: |
-          aws lambda update-function-code --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" --image-uri "$IMAGE_URI" >/dev/null
+          # By digest, not by tag: what was tested is exactly what runs, and
+          # it cannot be repointed afterwards.
+          aws lambda update-function-code \
+            --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            --image-uri "$IMAGE_URI" >/dev/null
           aws lambda wait function-updated --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}"
+          RUNNING=$(aws lambda get-function --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            --query Code.ImageUri --output text)
+          echo "running: $RUNNING"
+          test "$RUNNING" = "$IMAGE_URI" || { echo "Lambda is not running the image we pushed"; exit 1; }
 
       - name: Deploy check (version, fixture prediction, malformed -> 422, cold start)
         run: |
