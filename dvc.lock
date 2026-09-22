@@ -1,0 +1,57 @@
+schema: '2.0'
+stages:
+  validate:
+    cmd: uv run python -m tripduration.validate
+    deps:
+    - path: configs/schema_raw.yaml
+      hash: md5
+      md5: 1b0de076b897dd5bd33f49d4d90d50af
+      size: 2505
+    - path: data/raw/yellow
+      hash: md5
+      md5: 405cb20d5d6b37837353dc78ee95c170.dir
+      size: 186529213
+      nfiles: 7
+    - path: src/tripduration/config.py
+      hash: md5
+      md5: f61f1f0681aa88484ea4a4792f3c0793
+      size: 1927
+    - path: src/tripduration/ingest.py
+      hash: md5
+      md5: 7bee6decce46ece5308aa9f9dab85d2a
+      size: 17426
+    - path: src/tripduration/validate.py
+      hash: md5
+      md5: 08a4e15f1b97f4565ac5b34a44a2e95f
+      size: 9020
+    params:
+      params.yaml:
+        data:
+          service: yellow
+          raw_dir: data/raw/yellow
+          validated_dir: data/validated
+          reference_dir: data/reference
+          timezone: America/New_York
+        validity:
+          zone_min: 1
+          zone_max: 263
+          min_duration_s: 60
+          max_duration_min: 180
+          dst_window_hours: 3
+          dedupe_key:
+          - vendor_id
+          - tpep_pickup_datetime
+          - tpep_dropoff_datetime
+          - pu_location_id
+          - do_location_id
+    outs:
+    - path: data/validated
+      hash: md5
+      md5: 077ca43b8069b421b2cba4ab00be81f1.dir
+      size: 236097598
+      nfiles: 3
+    - path: reports/validation
+      hash: md5
+      md5: ac61dc0a9f924a0332af27b36318a78c.dir
+      size: 5557
+      nfiles: 3

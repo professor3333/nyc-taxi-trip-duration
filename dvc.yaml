@@ -1,0 +1,21 @@
+# The pipeline. `dvc repro` runs every stage whose deps or params changed.
+# Each stage is `uv run python -m tripduration.<stage>`; I/O lives at the
+# stage entry point, logic in importable functions with tests.
+
+stages:
+  validate:
+    desc: Normalise raw months to the canonical schema and apply ADR-0002 validity rules
+    cmd: uv run python -m tripduration.validate
+    deps:
+      - src/tripduration/validate.py
+      - src/tripduration/ingest.py
+      - src/tripduration/config.py
+      - configs/schema_raw.yaml
+      - data/raw/yellow
+    params:
+      - data
+      - validity
+    outs:
+      - data/validated
+      - reports/validation:
+          cache: false        # small JSON; lives in git so `git log` shows counts
