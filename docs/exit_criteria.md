@@ -37,7 +37,18 @@ remote exists (ADR-0004); a second machine cannot yet `dvc pull`. Determinism
 is established for the same `n_threads`; a different thread count is a
 different `params.yaml` and a different `dvc.lock`.
 
-## 2. Registry rollback — pending (Phase 4)
+## 2. Registry rollback — MET locally; live half pending (Phase 6)
+
+**Claim.** Registry holds ≥ 2 versions; `docs/promotions.md` records a
+promotion to N and a rollback to N−1; live `/health` reported N then N−1.
+
+**Proof (local).** `docs/promotions.md` rows of 2026-09-22: promote –→1,
+promote 1→2 (test MAE 4.661 < 4.689, same month 2024-12), rollback 2→1.
+`make registry-status` after rollback: `champion: 1, challenger: 2`,
+`champion.json.version: 1`. Commits `49fb1c0d` (v1 outputs) and `44c098eb`
+(v2 outputs). Tests: `tests/test_registry.py` (gate, refusals, round trip).
+
+**Pending.** The two `deploy.yml` run URLs and the two live `/health` bodies.
 ## 3. CI blocks a broken build — rehearsed, pending branch protection (Phase 6)
 
 PR #1 shows a deliberately failing test red (run 35686689059) then green

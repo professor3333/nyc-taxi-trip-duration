@@ -8,7 +8,7 @@ Tick a line only when its proof command passes, not when the code is written.
 | 1 | Data in, versioned: ingest + schema normalisation, zone reference, DVC + S3 remote, budget alert first | `dvc pull` on a second checkout retrieves raw months; ingest tests green | [x] local remote; S3 pending AWS |
 | 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [x] |
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [x] `make reproduce` identical within 1e-9 (exit 1, local) |
-| 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [ ] |
+| 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [x] |
 | 5 | Serving: FastAPI, validation, JSON logs, /health /ready, fallback, parity test, Dockerfile, api in Compose | Compose stack serves; fuzz finds no 500; /health degraded when model removed (exit 5 local) | [ ] |
 | 6 | CI complete + AWS deploy: container smoke, deploy/aws/*, deploy.yml, deploy_check.py, ADR-0008 | live URL passes deploy_check; broken PR blocked (exit 3); rollback redeploys previous (exit 2 live) | [ ] |
 | 7 | Scheduled retrain + monitoring: retrain.yml, prospective eval, monitor.yml, alarms, ADR-0010/11, failure_modes.md | dispatched retrain opens PR; monitor issue opens/closes; 422s visible in CloudWatch (exit 5 live) | [ ] |
@@ -45,3 +45,9 @@ Tick a line only when its proof command passes, not when the code is written.
 - First real run: val MAE model 3.998 / fallback 4.491; **test MAE model 4.689 / fallback 5.111**. Fit 40 s, `dvc repro` 1:48. MLflow run 0da2252d.
 - `make reproduce`: fresh clone -> pull -> repro -> metrics identical within 1e-9 on c13cdf3 (2:48). `docs/exit_criteria.md` #1.
 - `make pipeline-smoke` = `tests/test_pipeline.py` on 3×3k-row fixture months incl. planted invalid rows; includes the G6 identical-fits test. 70 tests.
+
+## Phase 4 log
+
+- ADR-0007 accepted: gate = same test month + lower MAE than champion + beats fallback; register refuses dirty/stale; promote/rollback refuse alias≠file.
+- Real registry (Compose): v1 (max_iter 200, test MAE 4.689) and v2 (max_iter 300, 4.661). Promote 1, promote 2, rollback to 1 — `docs/promotions.md`. champion.json carries git sha + DVC md5s so the image build never needs MLflow.
+- 78 tests. Retrain after a train.py edit produced a byte-identical model.pkl (`dvc push`: "Everything is up to date").

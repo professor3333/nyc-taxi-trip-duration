@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")  # noqa: E402 - must precede import
 
 import mlflow
 import yaml

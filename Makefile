@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback registry-status
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -43,3 +43,15 @@ compose-down: ## Stop the stack (volumes kept; add -v to wipe)
 
 mlflow-ui:    ## Open the MLflow UI
 	open http://localhost:5001
+
+register:     ## Register current DVC outputs as a new model version (refuses dirty git / stale dvc)
+	uv run python scripts/register.py
+
+promote:      ## Promote a version: make promote VERSION=2 REASON="beats v1 on 2024-12"
+	uv run python scripts/promote.py --version $(VERSION) --reason "$(REASON)"
+
+rollback:     ## Roll champion back to previous_version: make rollback REASON="deploy_check failed"
+	uv run python scripts/promote.py --rollback --reason "$(REASON)"
+
+registry-status: ## Aliases, versions and champion.json side by side
+	uv run python scripts/promote.py --status
