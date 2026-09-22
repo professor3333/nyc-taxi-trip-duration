@@ -181,6 +181,30 @@ Collecting real outcomes for real requests would be a separate feature
 (logging the request, waiting for the trip, joining the result) and is out of
 scope here — stated rather than implied.
 
+## Scheduling, overlap and skipping — observed
+
+**No new data → skip** (dispatched run `35763985452`, check-only for
+`2026-08`): steps `Decide the month` → gap guard → `Ingest` → **`No new data -
+skip retraining`** succeeded; `dvc pull/repro`, the prospective evaluation,
+the gate and the PR were all **skipped**. Green, nothing trained, nothing
+registered.
+
+**Overlap prevented** (runs `35763985452` and `35763998622`, fired 7 seconds
+apart): the second sat at `pending` while the first was `in_progress`, then
+ran. `cancel-in-progress: false` means a queued week is delayed, never
+dropped.
+
+**A gap is refused in 22 seconds, not after a download.** Dispatching
+`2025-03` while `2025-02` is still an unmerged candidate branch first cost a
+70 MB ingest, four months of validation and the quality stage before
+`prepare` refused it — correct (ADR-0003 forbids skipping a month) but
+expensive. The sequence is now checked before ingesting:
+
+```
+::error::2025-03 would leave a gap: the newest ingested month is 2025-01, so the next is 2025-02.
+Ingest 2025-02 first, or merge the candidate PR that already contains it.
+```
+
 ## Scheduling and overlap
 
 `retrain.yml` runs **Mondays 09:00 UTC** and on dispatch. `concurrency: {group: retrain,
