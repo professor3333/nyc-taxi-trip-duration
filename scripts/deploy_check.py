@@ -1,6 +1,7 @@
 """Check a running deployment. Used by deploy.yml, monitor.yml, CI and by hand.
 
     uv run python scripts/deploy_check.py --url http://localhost:8080
+    uv run python scripts/deploy_check.py --url $URL --sigv4   # IAM-auth URL
     uv run python scripts/deploy_check.py --url $URL --expect-version v1
     uv run python scripts/deploy_check.py --url $URL --malformed     # exit criterion 5
     uv run python scripts/deploy_check.py --url $URL --cold --n 5    # cold-start p95
@@ -68,16 +69,34 @@ MALFORMED: list[tuple[str, bytes | None, str]] = [
 ]
 
 
+def _sign(
+    url: str, method: str, body: bytes | None, headers: dict[str, str]
+) -> dict[str, str]:
+    """SigV4-sign a request to a Lambda Function URL whose auth type is AWS_IAM."""
+    import boto3
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    session = boto3.Session()
+    region = session.region_name or "us-east-1"
+    hdrs = {**headers, "host": url.split("/")[2]}
+    req = AWSRequest(method=method, url=url, data=body, headers=hdrs)
+    SigV4Auth(session.get_credentials(), "lambda", region).add_auth(req)
+    return dict(req.headers)
+
+
 def call(
     url: str,
     method: str = "GET",
     body: bytes | None = None,
     ctype: str = "application/json",
-    timeout: float = 30,
+    timeout: float = 90,
+    sigv4: bool = False,
 ) -> tuple[int, dict[str, Any] | str, float]:
-    req = urllib.request.Request(
-        url, data=body, method=method, headers={"content-type": ctype}
-    )
+    headers = {"content-type": ctype}
+    if sigv4:
+        headers = _sign(url, method, body, headers)
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -135,6 +154,11 @@ def main() -> int:
         help="compute the expected fixture duration offline from this dir",
     )
     ap.add_argument("--reference-dir", type=Path, default=Path("data/reference"))
+    ap.add_argument(
+        "--sigv4",
+        action="store_true",
+        help="sign requests (Function URL with AWS_IAM auth)",
+    )
     ap.add_argument("--allow-degraded", action="store_true")
     ap.add_argument(
         "--malformed",
@@ -150,13 +174,14 @@ def main() -> int:
     args = ap.parse_args()
     base = args.url.rstrip("/")
     failures: list[str] = []
+    sign = args.sigv4
 
     def check(name: str, ok: bool, detail: str) -> None:
         print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
         if not ok:
             failures.append(name)
 
-    status, health, ms = call(f"{base}/health")
+    status, health, ms = call(f"{base}/health", sigv4=sign)
     check("health reachable", status == 200, f"HTTP {status} in {ms:.0f} ms")
     if isinstance(health, dict):
         check(
@@ -172,14 +197,16 @@ def main() -> int:
                 f"{health.get('model_version')} (expected {args.expect_version})",
             )
 
-    status, ready, ms = call(f"{base}/ready")
+    status, ready, ms = call(f"{base}/ready", sigv4=sign)
     check(
         "ready",
         status == 200,
         f"HTTP {status} {json.dumps(ready) if isinstance(ready, dict) else ready}",
     )
 
-    status, pred, ms = call(f"{base}/predict", "POST", json.dumps(FIXTURE).encode())
+    status, pred, ms = call(
+        f"{base}/predict", "POST", json.dumps(FIXTURE).encode(), sigv4=sign
+    )
     check(
         "fixture predict 200",
         status == 200 and isinstance(pred, dict) and "duration_min" in pred,
@@ -197,7 +224,7 @@ def main() -> int:
 
     cases = MALFORMED if args.malformed else MALFORMED[:1]
     for name, body, ctype in cases:
-        status, resp, ms = call(f"{base}/predict", "POST", body, ctype)
+        status, resp, ms = call(f"{base}/predict", "POST", body, ctype, sigv4=sign)
         has_rid = isinstance(resp, dict) and "request_id" in resp
         check(
             f"malformed: {name}",
@@ -208,7 +235,9 @@ def main() -> int:
     if args.cold:
         lat = []
         for i in range(args.n):
-            _, _, ms = call(f"{base}/predict", "POST", json.dumps(FIXTURE).encode())
+            _, _, ms = call(
+                f"{base}/predict", "POST", json.dumps(FIXTURE).encode(), sigv4=sign
+            )
             lat.append(ms)
             print(f"      call {i + 1}: {ms:.0f} ms")
         print(

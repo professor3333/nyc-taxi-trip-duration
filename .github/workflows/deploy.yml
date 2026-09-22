@@ -57,14 +57,15 @@ jobs:
           REPO: ${{ secrets.ECR_REPOSITORY }}
         run: |
           IMAGE="$REGISTRY/$REPO"
-          docker build \
+          # Lambda rejects OCI manifests, so buildx must emit Docker v2 media
+          # types: --provenance=false --sbom=false + oci-mediatypes=false.
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --output type=image,oci-mediatypes=false,push=true \
             --build-arg MODELS_SRC=build/champion/models \
             --build-arg REFERENCE_SRC=build/champion/reference \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg MODEL_VERSION=${{ steps.champ.outputs.version }} \
             -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:${{ steps.champ.outputs.version }}" .
-          docker push "$IMAGE:${{ github.sha }}"
-          docker push "$IMAGE:${{ steps.champ.outputs.version }}"
           echo "IMAGE_URI=$IMAGE:${{ github.sha }}" >> "$GITHUB_ENV"
 
       - name: Update Lambda and wait
@@ -74,7 +75,7 @@ jobs:
 
       - name: Deploy check (version, fixture prediction, malformed -> 422, cold start)
         run: |
-          uv run python scripts/deploy_check.py --url "${{ secrets.FUNCTION_URL }}" \
+          uv run python scripts/deploy_check.py --url "${{ secrets.FUNCTION_URL }}" --sigv4 \
             --expect-version ${{ steps.champ.outputs.version }} \
             --models-dir build/champion/models --reference-dir build/champion/reference \
             --malformed --cold --n 5

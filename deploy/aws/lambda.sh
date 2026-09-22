@@ -17,13 +17,23 @@ else
   log "created function $LAMBDA_FUNCTION_NAME (${LAMBDA_MEMORY_MB} MB, ${LAMBDA_TIMEOUT_S} s)"
 fi
 aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME"
-aws lambda put-function-concurrency --function-name "$LAMBDA_FUNCTION_NAME" --reserved-concurrent-executions "$LAMBDA_RESERVED_CONCURRENCY" >/dev/null
+# Reserved concurrency caps cost. A new account has a total limit of 10, and
+# AWS refuses a reservation that leaves fewer than 10 unreserved — in that case
+# the account limit itself is the cap, which is what we wanted anyway.
+if ! aws lambda put-function-concurrency --function-name "$LAMBDA_FUNCTION_NAME" \
+     --reserved-concurrent-executions "$LAMBDA_RESERVED_CONCURRENCY" >/dev/null 2>&1; then
+  LIMIT=$(aws lambda get-account-settings --query AccountLimit.ConcurrentExecutions --output text)
+  log "could not reserve $LAMBDA_RESERVED_CONCURRENCY; account concurrency limit is $LIMIT and already caps spend"
+fi
 
 if ! aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
-  aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --auth-type NONE >/dev/null
-  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url \
-    --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE >/dev/null
-  log "created public Function URL (auth NONE; reserved concurrency $LAMBDA_RESERVED_CONCURRENCY caps cost)"
+  aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" \
+    --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
+  if [ "$LAMBDA_URL_AUTH_TYPE" = "NONE" ]; then
+    aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url \
+      --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE >/dev/null
+  fi
+  log "created Function URL (auth $LAMBDA_URL_AUTH_TYPE)"
 fi
 FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --query FunctionUrl --output text)
 
