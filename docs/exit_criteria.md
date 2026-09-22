@@ -109,15 +109,24 @@ field-level message, e.g.
 CloudWatch Logs Insights over the same window shows the matching
 `validation_error` WARNING lines and one `request` line per call with
 `status: 422`.
-## 6. Scheduled retraining has run — cycle proven locally; Actions run pending
+## 6. Scheduled retraining has run — MET
 
-The exact steps of `retrain.yml` ran by hand on 2026-09-22 for 2025-01:
-ingest → `dvc add` → `dvc repro` → `prospective_eval.py` → candidate commit
-`f6b2f155` → `make register` (v3) → `make promote` via the prospective gate.
-`reports/monitoring/2025-01.json`: champion v1 MAE 3.841 (0.82× promotion-time),
-bias +1.47 min after congestion pricing, verdict ok. The `retrain/YYYY-MM` PR
-opened by Actions needs the S3 remote.
-## 7. Compose runs API + MLflow + DB — MET
+**Proof:** PR #24 `Retrain candidate 2025-02`, branch `retrain/2025-02`,
+labelled `retrain`, **opened by `retrain.yml`** (dispatched run). Its body
+carries the split (train 2024-10..12 / val 2025-01 / test 2025-02), the
+candidate-vs-fallback metrics (test MAE 3.756 vs 4.007), the prospective
+evaluation of the champion (`champion v3 MAE 3.623 … 0.96x promotion-time
+3.790 -> OK`) and `dvc metrics diff main`.
+
+The workflow ingested 2025-02 from TLC (3,577,543 rows), pushed to the S3
+DVC remote, re-ran the pipeline, evaluated the champion on a month it had
+never seen, and stopped — it did not register or promote (ADR-0010).
+
+ADR-0007's gate then **refused** the candidate: 3.756 is not below the
+champion's 3.623 on the same month. Recorded as a comment on the PR. The
+cycle also ran by hand for 2025-01 (champion v1 → 3.841, verdict ok), which
+is how v3 was promoted.
+## 7. Compose runs API + MLflow + DB — MET (and the loop now ends on AWS)
 
 `docker compose up -d --wait` brings up `postgres` (healthy), `mlflow`
 (healthy, :5001) and `api` (healthy, :8080, built from `Dockerfile`).
