@@ -1,0 +1,37 @@
+# Canonical raw schema for TLC yellow trip records, as written by the ingest stage.
+#
+# - `variants` are every spelling of the column seen in published files. Ingest
+#   renames each to the canonical key. A column not listed under any `variants`
+#   is an error, never a warning: schema drift is seen, not absorbed. To accept a
+#   new spelling, add it here deliberately, in a reviewed commit.
+# - `dtype` is the Arrow type every month is cast to, so all raw files agree.
+# - `optional: true` marks columns absent from older months; ingest adds them as
+#   all-null so downstream stages can rely on one schema.
+# Rows are never touched by ingest.
+
+source:
+  trip_url_template: "https://d37ci6vzurychx.cloudfront.net/trip-data/{service}_tripdata_{month}.parquet"
+  zone_lookup_url: "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+  zone_lookup_columns: [LocationID, Borough, Zone, service_zone]
+
+columns:
+  vendor_id:              {dtype: int64,         variants: [VendorID]}
+  tpep_pickup_datetime:   {dtype: "timestamp[us]", variants: [tpep_pickup_datetime]}
+  tpep_dropoff_datetime:  {dtype: "timestamp[us]", variants: [tpep_dropoff_datetime]}
+  passenger_count:        {dtype: int64,         variants: [passenger_count]}
+  trip_distance:          {dtype: float64,       variants: [trip_distance]}
+  ratecode_id:            {dtype: int64,         variants: [RatecodeID]}
+  store_and_fwd_flag:     {dtype: string,        variants: [store_and_fwd_flag]}
+  pu_location_id:         {dtype: int64,         variants: [PULocationID]}
+  do_location_id:         {dtype: int64,         variants: [DOLocationID]}
+  payment_type:           {dtype: int64,         variants: [payment_type]}
+  fare_amount:            {dtype: float64,       variants: [fare_amount]}
+  extra:                  {dtype: float64,       variants: [extra]}
+  mta_tax:                {dtype: float64,       variants: [mta_tax]}
+  tip_amount:             {dtype: float64,       variants: [tip_amount]}
+  tolls_amount:           {dtype: float64,       variants: [tolls_amount]}
+  improvement_surcharge:  {dtype: float64,       variants: [improvement_surcharge]}
+  total_amount:           {dtype: float64,       variants: [total_amount]}
+  congestion_surcharge:   {dtype: float64,       variants: [congestion_surcharge]}
+  airport_fee:            {dtype: float64,       variants: [Airport_fee, airport_fee], optional: true}
+  cbd_congestion_fee:     {dtype: float64,       variants: [cbd_congestion_fee],       optional: true}
