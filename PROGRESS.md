@@ -10,9 +10,9 @@ Tick a line only when its proof command passes, not when the code is written.
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [x] `make reproduce` identical within 1e-9 (exit 1, local) |
 | 4 | Registry, promote, rollback: register.py, promote.py, champion.json, promotions.md, ADR-0007 | promote v1->v2 and roll back, both recorded, aliases and file agree (exit 2 local) | [x] |
 | 5 | Serving: FastAPI, validation, JSON logs, /health /ready, fallback, parity test, Dockerfile, api in Compose | Compose stack serves; fuzz finds no 500; /health degraded when model removed (exit 5 local) | [x] |
-| 6 | CI complete + AWS deploy: container smoke, deploy/aws/*, deploy.yml, deploy_check.py, ADR-0008 | live URL passes deploy_check; broken PR blocked (exit 3); rollback redeploys previous (exit 2 live) | [ ] |
-| 7 | Scheduled retrain + monitoring: retrain.yml, prospective eval, monitor.yml, alarms, ADR-0010/11, failure_modes.md | dispatched retrain opens PR; monitor issue opens/closes; 422s visible in CloudWatch (exit 5 live) | [ ] |
-| 8 | Cost + docs + ship: cost.md, Fargate comparison, runbook, model card, README, exit_criteria.md | every exit criterion has a linked proof (exit 4) | [ ] |
+| 6 | CI complete + AWS deploy: container smoke, deploy/aws/*, deploy.yml, deploy_check.py, ADR-0008 | live URL passes deploy_check; broken PR blocked (exit 3); rollback redeploys previous (exit 2 live) | [~] CI + protection done (exit 3 met); AWS scripted, blocked on account |
+| 7 | Scheduled retrain + monitoring: retrain.yml, prospective eval, monitor.yml, alarms, ADR-0010/11, failure_modes.md | dispatched retrain opens PR; monitor issue opens/closes; 422s visible in CloudWatch (exit 5 live) | [~] full retrain cycle run locally (2025-01, v3 promoted); workflows written; Actions runs need S3 |
+| 8 | Cost + docs + ship: cost.md, Fargate comparison, runbook, model card, README, exit_criteria.md | every exit criterion has a linked proof (exit 4) | [~] docs written; cost ledger honest 'off'; exit 4 needs Cost Explorer |
 
 ## Phase 0 log
 
@@ -61,3 +61,11 @@ Tick a line only when its proof command passes, not when the code is written.
 - Dockerfile: multi-stage, `uv sync --frozen --no-dev --no-group train`, python:3.12-slim, non-root, Lambda Web Adapter 0.9.1, 903 MB. `scripts/fetch_champion.py` pulls the champion's artefacts from the DVC remote at its commit and verifies md5s; `make docker-build-champion`.
 - Compose `api` service healthy alongside mlflow + postgres.
 - 103 tests: 11 malformed-input cases → 422, non-JSON/empty → 422, 150-example fuzz never 500, degraded/ready/corrupt/feature-mismatch/both-missing, request-log fields, champion md5 → `v7`, **parity** offline vs API on 40 rows + batch (G7).
+
+## Phase 6–8 log
+
+- ci.yml complete: container smoke via `deploy_check.py --malformed` (fixture-trained image). Branch protection on main (required `ci`, admins enforced); PR #12 broken Dockerfile → BLOCKED → fixed → merged (exit 3).
+- `deploy/aws/`: budget, s3, ecr, iam (Lambda exec + GitHub OIDC), lambda (+URL, log group, ErrorCount/FallbackCount alarms, SNS), teardown. **Unrun: no AWS account on this machine.**
+- Retrain cycle run locally for 2025-01: ingest (first month with cbd_congestion_fee) → repro (split 10..11/12/01) → prospective eval of v1 (MAE 3.841, bias flipped −1.82 → +1.47: congestion pricing) → register v3 → promote through the prospective gate. `reports/monitoring/2025-01.json`, `docs/monitoring.md`.
+- Workflows written: deploy.yml (on champion.json change), retrain.yml (monthly, candidate PR + drift issue), monitor.yml (daily, service-health issue). YAML-validated; Actions runs need the S3 remote + secrets.
+- ADR-0004/0008/0010/0011; docs: architecture, runbook, failure_modes, monitoring, cost (off), model_card, README.
