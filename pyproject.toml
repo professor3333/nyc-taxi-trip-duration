@@ -1,0 +1,41 @@
+[project]
+name = "tripduration"
+version = "0.1.0"
+description = "NYC taxi trip-duration estimation service: zone pair + departure time -> minutes"
+readme = "README.md"
+authors = [
+    { name = "Niroj33", email = "86530493+professor3333@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: full-data or long-running tests, excluded by default (run with -m slow)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]

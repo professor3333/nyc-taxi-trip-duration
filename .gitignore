@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets and local config
+.env
+
+# Data and models are DVC-tracked; only pointers and READMEs are committed
+data/**
+!data/README.md
+!data/**/*.dvc
+!data/**/.gitignore
+models/*
+!models/champion.json
+!models/.gitignore
+
+# Local MLflow and SQLite state
+mlruns/
+mlartifacts/
+*.db
+
+# Notebook noise
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
