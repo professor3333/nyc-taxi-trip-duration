@@ -206,6 +206,7 @@ class Predictor:
                 f"model={self.load_error}; fallback={self.fallback_error}"
             )
         frame = pd.DataFrame({PU: pu, DO: do, DEPARTURE: pd.to_datetime(departure)})
+        frame[DEPARTURE] = frame[DEPARTURE].dt.floor("h")
         if self.kind == "model":
             x = build_features(frame, self.ref)
             pred = self.model.predict(x)
