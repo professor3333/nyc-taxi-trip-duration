@@ -28,9 +28,6 @@ jobs:
       - name: Lint (ruff check, ruff format --check, mypy)
         run: make lint
 
-      - name: Data-transformation and API tests
-        run: make test
-
       # Called out separately because it is the check that matters most: the
       # offline pipeline and POST /predict must agree to 1e-9 on the same
       # rows, and the API must refuse a model whose feature list differs.
@@ -40,6 +37,9 @@ jobs:
             tests/test_api.py::test_parity_offline_pipeline_vs_api \
             tests/test_api.py::test_feature_list_mismatch_refuses_model \
             tests/test_prepare.py::test_run_end_to_end_drops_post_trip_columns
+
+      - name: Data-transformation and API tests
+        run: make test
 
       - name: Train on the fixture months (no full data, no network)
         run: uv run pytest -q tests/test_pipeline.py
