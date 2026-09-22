@@ -192,5 +192,13 @@ validating anything:
 
 ```
 ### No new data
-`2025-03` is not published yet. Next check: Monday 09:00 UTC.
+`2026-08` is not published yet. Next check: Monday 09:00 UTC.
 ```
+
+**A bug this found.** TLC's CloudFront sits in front of S3 without
+`s3:ListBucket`, so a month that does not exist returns **403, not 404** —
+verified live: `2025-03` → 200, `2026-08` → 403, `2099-01` → 403, a nonsense
+path → 403. Ingest treated only 404 as "not published", so the weekly check
+would have failed *every Monday* until a month appeared. Both codes are now
+"not published", neither is retried, and there is no authentication on these
+URLs so a 403 cannot mean "not allowed".

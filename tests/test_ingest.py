@@ -320,6 +320,32 @@ def test_ingest_month_404_raises_and_writes_nothing(
     assert not (tmp_path / "reports").exists()
 
 
+def test_403_means_not_published(schema: RawSchema, tmp_path: Path) -> None:
+    """TLC's CloudFront returns 403, not 404, for a month that does not exist:
+    verified live against 2026-08, 2099-01 and a nonsense path. Treating only
+    404 as unpublished made the weekly retrain fail every week."""
+    with pytest.raises(MonthNotPublishedError, match="403"):
+        _ingest(tmp_path, schema, _server_failing(403), month="2099-01")
+    assert not (tmp_path / "data").exists()
+
+
+def test_403_is_not_retried(schema: RawSchema, tmp_path: Path) -> None:
+    server = FakeServer(b"")
+    server.fail_first = {"HEAD": [403] * 5}
+    with pytest.raises(MonthNotPublishedError):
+        _ingest(tmp_path, schema, server)
+    assert server.calls == ["HEAD"]  # one attempt, no backoff
+
+
+def test_main_exits_zero_on_403(tmp_path: Path) -> None:
+    rc = ingest.main(
+        _cli_args(tmp_path, "--month", "2099-01"),
+        opener=_server_failing(403),
+        sleep=NO_SLEEP,
+    )
+    assert rc == 0
+
+
 def test_ingest_month_404_is_not_retried(schema: RawSchema, tmp_path: Path) -> None:
     server = FakeServer(b"")
     server.fail_first = {"HEAD": [404]}
@@ -358,8 +384,9 @@ def test_ingest_month_gives_up_after_retries(schema: RawSchema, tmp_path: Path) 
 def test_ingest_month_non_transient_error_is_not_retried(
     schema: RawSchema, tmp_path: Path
 ) -> None:
+    """401 is neither transient nor "not published": it propagates at once."""
     server = FakeServer(b"")
-    server.fail_first = {"HEAD": [403]}
+    server.fail_first = {"HEAD": [401]}
     with pytest.raises(urllib.error.HTTPError):
         _ingest(tmp_path, schema, server)
     assert server.calls == ["HEAD"]
