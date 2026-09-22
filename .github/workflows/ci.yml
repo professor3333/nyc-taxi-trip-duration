@@ -41,6 +41,7 @@ jobs:
         run: |
           docker build \
             --build-arg MODELS_SRC=build/ci-models \
+            --build-arg REFERENCE_SRC=tests/fixtures \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg MODEL_VERSION=ci \
             -t tripduration:ci .

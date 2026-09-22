@@ -14,6 +14,7 @@ ARG LAMBDA_ADAPTER_VERSION=0.9.1
 # Where the model artefacts come from: the working tree (dev) or the directory
 # scripts/fetch_champion.py fills from the DVC remote (deploy).
 ARG MODELS_SRC=models
+ARG REFERENCE_SRC=data/reference
 
 # --- builder: resolve and install the locked runtime environment ---------------------
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
@@ -30,6 +31,7 @@ RUN uv sync --frozen --no-dev --no-group train
 # --- runtime -------------------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime
 ARG MODELS_SRC
+ARG REFERENCE_SRC
 ARG GIT_SHA=unknown
 ARG MODEL_VERSION=unknown
 LABEL org.opencontainers.image.source="https://github.com/professor3333/nyc-taxi-trip-duration" \
@@ -43,7 +45,7 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src ./src
 COPY --chown=app:app params.yaml ./params.yaml
 COPY --chown=app:app configs/holidays.csv ./configs/holidays.csv
-COPY --chown=app:app data/reference/zone_centroids.csv ./data/reference/zone_centroids.csv
+COPY --chown=app:app ${REFERENCE_SRC}/zone_centroids.csv ./data/reference/zone_centroids.csv
 COPY --chown=app:app ${MODELS_SRC}/model.pkl ${MODELS_SRC}/fallback_table.parquet ${MODELS_SRC}/model_meta.json ./models/
 COPY --chown=app:app ${MODELS_SRC}/champion.json ./models/champion.json
 
