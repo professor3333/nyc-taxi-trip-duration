@@ -1,14 +1,14 @@
 {
   "fallback_md5": "16cc9d09ae9eab8dc0e385036719e405",
-  "git_sha": "44c098eb15736b7fb18db0d0948ea07d011a91aa",
+  "git_sha": "49fb1c0dee239a8f55462678fc5f1618497ffccb",
   "mae_test_fallback": 5.111258,
-  "mae_test_model": 4.661463,
-  "model_md5": "357b82843c31219582816e39d86b64b0",
+  "mae_test_model": 4.688721,
+  "model_md5": "2c521291dc8cef52dcca29988bb00699",
   "model_name": "nyc-taxi-trip-duration",
-  "previous_version": 1,
-  "promoted_at": "2026-09-22T05:56:16+00:00",
-  "reason": "max_iter 300: test MAE 4.661 < champion 4.689 on 2024-12",
-  "run_id": "3389f8a939b941e19b0c2c12199b339b",
+  "previous_version": 2,
+  "promoted_at": "2026-09-22T05:56:18+00:00",
+  "reason": "exit criterion 2 rehearsal: prove rollback restores v1",
+  "run_id": "502fe6e4792644b1a5b141b4c163cf9f",
   "test_month": "2024-12",
-  "version": 2
+  "version": 1
 }
