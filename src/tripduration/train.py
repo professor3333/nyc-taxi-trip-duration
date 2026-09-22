@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import pickle
+import platform
 import subprocess
 import sys
 import time
@@ -42,6 +43,42 @@ log = logging.getLogger(__name__)
 MODEL_FILE = "model.pkl"
 FALLBACK_FILE = "fallback_table.parquet"
 META_FILE = "model_meta.json"
+
+
+def environment() -> dict[str, Any]:
+    """Everything about *where* a model was fitted, so a run can be re-created.
+
+    The lock file's md5 pins the exact dependency set (`uv sync --frozen`
+    installs precisely it); the package versions are recorded as well so a
+    mismatch is legible without resolving the lock. `container` is the image
+    id when training ran inside one, so the training environment is named
+    rather than assumed.
+    """
+    import numpy
+    import pandas
+    import pyarrow
+    import sklearn
+
+    lock = Path("uv.lock")
+    return {
+        "python_version": sys.version.split()[0],
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "uv_lock_md5": hashlib.md5(lock.read_bytes()).hexdigest()
+        if lock.exists()
+        else "",
+        "packages": {
+            "scikit-learn": sklearn.__version__,
+            "pandas": pandas.__version__,
+            "pyarrow": pyarrow.__version__,
+            "numpy": numpy.__version__,
+        },
+        "container": os.environ.get("TRAINING_IMAGE", ""),
+        "thread_env": {
+            k: os.environ.get(k, "")
+            for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+        },
+    }
 
 
 def git_sha() -> str:
@@ -96,6 +133,20 @@ def write_artifacts(
     (out_dir / META_FILE).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
 
 
+def data_versions(lock_path: Path = Path("dvc.lock")) -> dict[str, str]:
+    """md5 of every pipeline input and output, i.e. the exact data a run saw."""
+    import yaml
+
+    lock = yaml.safe_load(lock_path.read_text()) if lock_path.exists() else {}
+    out: dict[str, str] = {}
+    for name, stage in (lock.get("stages") or {}).items():
+        for kind in ("deps", "outs"):
+            for item in stage.get(kind, []) or []:
+                if "md5" in item:
+                    out[f"{name}.{kind}:{item['path']}"] = item["md5"]
+    return out
+
+
 def run(
     params: Params,
     ref: ReferenceData,
@@ -131,6 +182,13 @@ def run(
 
     meta = {
         "feature_columns": list(FEATURE_COLUMNS),
+        "environment": environment(),
+        "data_versions": data_versions(),
+        "dvc_lock_md5": (
+            hashlib.md5(Path("dvc.lock").read_bytes()).hexdigest()
+            if Path("dvc.lock").exists()
+            else ""
+        ),
         "categorical_features": list(CATEGORICAL_FEATURES),
         "target": TARGET,
         "train_months": split["train"],
@@ -144,6 +202,12 @@ def run(
         "n_threads": params.n_threads,
         "sklearn_version": sklearn.__version__,
         "python_version": sys.version.split()[0],
+        "split_boundaries": {
+            "train_first": split["train"][0],
+            "train_last": split["train"][-1],
+            "val": split["val"],
+            "test": split["test"],
+        },
         "git_sha": git_sha(),
         "val_mae_model": metrics["val_mae_model"],
         "val_mae_fallback": metrics["val_mae_fallback"],
@@ -168,7 +232,16 @@ def run(
                     "params_hash": meta["params_hash"],
                 }
             )
-            mlflow.set_tags({"git_sha": meta["git_sha"], "stage": "train"})
+            mlflow.set_tags(
+                {
+                    "git_sha": meta["git_sha"],
+                    "stage": "train",
+                    "dvc_lock_md5": meta["dvc_lock_md5"],
+                    "uv_lock_md5": meta["environment"]["uv_lock_md5"],
+                    "platform": meta["environment"]["platform"],
+                    "container": meta["environment"]["container"],
+                }
+            )
             mlflow.log_metrics(
                 {k: v for k, v in metrics.items() if isinstance(v, int | float)}
             )
