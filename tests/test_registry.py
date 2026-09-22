@@ -17,6 +17,7 @@ from tripduration.config import Params
 from tripduration.registry import ChampionState, Gate, RegistryError, promotion_gate
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_CENTROIDS = ROOT / "tests" / "fixtures" / "zone_centroids.csv"
 MODEL = "test-model"
 
 
@@ -102,6 +103,13 @@ def tiny_artefacts(tmp_path_factory: pytest.TempPathFactory, params: Params) -> 
         out, model, fb, {"feature_columns": [], "train_months": ["2024-10"]}
     )
     return out
+
+
+@pytest.fixture(autouse=True)
+def _reference_from_fixtures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The repo's data/reference/ is DVC-tracked and absent in CI."""
+    monkeypatch.setattr(reg, "REFERENCE_CSV", FIXTURE_CENTROIDS)
+    monkeypatch.setattr(reg, "HOLIDAYS_CSV", ROOT / "configs" / "holidays.csv")
 
 
 @pytest.fixture

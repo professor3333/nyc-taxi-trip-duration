@@ -31,6 +31,10 @@ CHALLENGER = "challenger"
 CHAMPION_FILE = Path("models/champion.json")
 CHAMPION_META_FILE = Path("models/champion_meta.json")
 CHAMPION_FIXTURE_FILE = Path("models/champion_fixture.csv")
+# Reference data the champion's predictions are rebuilt with. Module-level so
+# a test can point them at tests/fixtures/ without DVC-tracked data present.
+REFERENCE_CSV = Path("data/reference/zone_centroids.csv")
+HOLIDAYS_CSV = Path("configs/holidays.csv")
 PROMOTIONS_LOG = Path("docs/promotions.md")
 
 ARTEFACTS = (
@@ -334,9 +338,7 @@ def save_champion_fixture(
     with (local / "model.pkl").open("rb") as fh:
         model = pickle.load(fh)  # noqa: S301 - our own registered artefact
     fb = FallbackTable.load(local / "fallback_table.parquet")
-    ref = ReferenceData.load(
-        Path("data/reference/zone_centroids.csv"), Path("configs/holidays.csv")
-    )
+    ref = ReferenceData.load(REFERENCE_CSV, HOLIDAYS_CSV)
     frame: pd.DataFrame = fixture_predictions(model, fb, ref)
     dest.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(dest, index=False)
