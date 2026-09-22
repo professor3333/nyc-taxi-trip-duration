@@ -51,3 +51,17 @@ api:                        # ADR-0009 — accepted departure_time window (inclu
 
 monitoring:                 # ADR-0011 — prospective evaluation of the champion on each new month
   mae_degradation_ratio: 1.15   # alert when prospective MAE > promotion-time test MAE x this
+
+quality:                    # acceptance rules; any failure stops the pipeline before training
+  min_rows_raw: 1000000     # a real month is 3.4-3.9M rows; far less means a truncated download
+  min_rows_valid: 500000
+  max_reject_rate: 0.10     # ADR-0002 removes ~3.8%; 10% means something changed
+  max_null_rate:             # per canonical column, on the raw month
+    tpep_pickup_datetime: 0.0
+    tpep_dropoff_datetime: 0.0
+    pu_location_id: 0.0
+    do_location_id: 0.0
+    passenger_count: 0.25   # ~10% is normal (one vendor feed); not a feature, so tolerated
+  duration_p50_bounds: [5.0, 30.0]    # median trip, minutes
+  duration_p99_bounds: [30.0, 180.0]
+  max_share_single_zone_pair: 0.05    # one pair dominating means a broken join or a test file

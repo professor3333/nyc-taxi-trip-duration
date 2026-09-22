@@ -14,8 +14,8 @@ stages:
       nfiles: 9
     - path: src/tripduration/config.py
       hash: md5
-      md5: ef0f07c8c015d6a95f4c12b203ebe734
-      size: 2396
+      md5: 9a65af113de3016d1b6e188e49c8ae30
+      size: 3396
     - path: src/tripduration/ingest.py
       hash: md5
       md5: 7bee6decce46ece5308aa9f9dab85d2a
@@ -71,10 +71,15 @@ stages:
       md5: 2afb1856853d8ddfde481715b60cf0d4.dir
       size: 310812131
       nfiles: 4
+    - path: reports/quality
+      hash: md5
+      md5: ee59b8511c989fe25fd951e78cb01d8a.dir
+      size: 17926
+      nfiles: 5
     - path: src/tripduration/config.py
       hash: md5
-      md5: ef0f07c8c015d6a95f4c12b203ebe734
-      size: 2396
+      md5: 9a65af113de3016d1b6e188e49c8ae30
+      size: 3396
     - path: src/tripduration/features.py
       hash: md5
       md5: 9ae2d0082ff3f53e4b445abd4dc5466e
@@ -129,8 +134,8 @@ stages:
       size: 682
     - path: src/tripduration/config.py
       hash: md5
-      md5: ef0f07c8c015d6a95f4c12b203ebe734
-      size: 2396
+      md5: 9a65af113de3016d1b6e188e49c8ae30
+      size: 3396
     - path: src/tripduration/fallback.py
       hash: md5
       md5: e351f4498784283c84c10d0a1f87f96e
@@ -177,7 +182,7 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: e8b5ddc2422ad121ecc3229de215e61c
+      md5: 4cb4e2dc0c676ca77c1c53610d6d0b78
       size: 1129
   evaluate:
     cmd: uv run python -m tripduration.evaluate
@@ -208,7 +213,7 @@ stages:
       size: 2194858
     - path: models/model_meta.json
       hash: md5
-      md5: e8b5ddc2422ad121ecc3229de215e61c
+      md5: 4cb4e2dc0c676ca77c1c53610d6d0b78
       size: 1129
     - path: src/tripduration/evaluate.py
       hash: md5
@@ -225,10 +230,86 @@ stages:
     outs:
     - path: metrics/eval.json
       hash: md5
-      md5: aad2228723d62a490f536168165aadde
+      md5: e81382962246e7154f4fc093c2a1381e
       size: 1511
     - path: reports/eval
       hash: md5
       md5: 8a14590cce837b8b812b5dae91b183bc.dir
       size: 8211
       nfiles: 4
+  quality:
+    cmd: uv run python -m tripduration.quality
+    deps:
+    - path: configs/schema_raw.yaml
+      hash: md5
+      md5: 1b0de076b897dd5bd33f49d4d90d50af
+      size: 2505
+    - path: data/raw/yellow
+      hash: md5
+      md5: 18d6d583c9fd5615ef38bedb24de6d32.dir
+      size: 245687567
+      nfiles: 9
+    - path: data/validated
+      hash: md5
+      md5: 2afb1856853d8ddfde481715b60cf0d4.dir
+      size: 310812131
+      nfiles: 4
+    - path: src/tripduration/config.py
+      hash: md5
+      md5: 9a65af113de3016d1b6e188e49c8ae30
+      size: 3396
+    - path: src/tripduration/ingest.py
+      hash: md5
+      md5: 7bee6decce46ece5308aa9f9dab85d2a
+      size: 17426
+    - path: src/tripduration/quality.py
+      hash: md5
+      md5: 6a310662dde79b74607e1f805d09864d
+      size: 10854
+    - path: src/tripduration/validate.py
+      hash: md5
+      md5: 08a4e15f1b97f4565ac5b34a44a2e95f
+      size: 9020
+    params:
+      params.yaml:
+        data:
+          service: yellow
+          raw_dir: data/raw/yellow
+          validated_dir: data/validated
+          reference_dir: data/reference
+          timezone: America/New_York
+        quality:
+          min_rows_raw: 1000000
+          min_rows_valid: 500000
+          max_reject_rate: 0.1
+          max_null_rate:
+            tpep_pickup_datetime: 0.0
+            tpep_dropoff_datetime: 0.0
+            pu_location_id: 0.0
+            do_location_id: 0.0
+            passenger_count: 0.25
+          duration_p50_bounds:
+          - 5.0
+          - 30.0
+          duration_p99_bounds:
+          - 30.0
+          - 180.0
+          max_share_single_zone_pair: 0.05
+        validity:
+          zone_min: 1
+          zone_max: 263
+          min_duration_s: 60
+          max_duration_min: 180
+          dst_window_hours: 3
+          dedupe_key:
+          - vendor_id
+          - tpep_pickup_datetime
+          - tpep_dropoff_datetime
+          - pu_location_id
+          - do_location_id
+    outs:
+    - path: reports/quality
+      hash: md5
+      md5: ee59b8511c989fe25fd951e78cb01d8a.dir
+      size: 17926
+      nfiles: 5

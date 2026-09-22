@@ -1,7 +1,7 @@
 {
-  "git_sha": "95942abbc7cc3d50cdf35641252986333fc30202",
+  "git_sha": "48660586ffcd17705b840c7930046f8484c5638f",
   "model_beats_fallback_on_test": true,
-  "params_hash": "4f3d5ac916d0897f",
+  "params_hash": "2ea9cd9afc1ea1ae",
   "test": {
     "fallback": {
       "bias": 1.288698715139702,

@@ -77,3 +77,10 @@ Tick a line only when its proof command passes, not when the code is written.
 - `retrain.yml` opened PR #24 (2025-02); its gate refused the candidate. `monitor.yml` green.
 - Four things the account taught us, all in ADR-0008: 1024 MB cannot finish init in 30 s (CPU scales with memory); Lambda rejects OCI manifests; Function URLs answer only the account root here, so CI checks go through the Lambda API; reserved concurrency cannot be set when the account limit is 10.
 - Two real bugs the deployment surfaced: `dvc get --rev <sha>` breaks after a squash merge (now fetching by content hash), and a test was overwriting `models/champion_meta.json` (caught in production by the feature-list check, which degraded to the fallback instead of serving a wrong model).
+
+## Data quality milestone — 2026-09-22
+
+- `quality` stage between `validate` and `prepare`: per-month report (`reports/quality/YYYY-MM.json`) with observed schema, null rates, zone ranges, duration percentiles and the bands ADR-0002 removes, plus one pass/fail line per acceptance rule; `summary.json` across months.
+- Eight acceptance rules in `params.yaml › quality`; any failure exits 1 and blocks `prepare`/`train`.
+- Proof (`docs/data_quality.md`): 2024-11 truncated → blocked by `quality`; unknown column → blocked by `validate` naming the column; unreadable bytes → blocked by `validate`. Month restored, md5 verified.
+- 116 tests (11 new).
