@@ -81,7 +81,7 @@ def tiny_artefacts(tmp_path_factory: pytest.TempPathFactory, params: Params) -> 
 
     out = tmp_path_factory.mktemp("artefacts")
     ref = ReferenceData.load(
-        ROOT / "data" / "reference" / "zone_centroids.csv",
+        FIXTURE_CENTROIDS,
         ROOT / "configs" / "holidays.csv",
     )
     rng = np.random.default_rng(3)
