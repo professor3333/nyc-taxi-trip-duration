@@ -19,6 +19,10 @@ on:
       month:
         description: "YYYY-MM to ingest (default: the month after the newest under data/raw/yellow)"
         required: false
+      check_only:
+        description: "Only check whether the month is published; never ingest or train"
+        type: boolean
+        default: false
 
 # One retrain at a time. Two runs would race on the same branch, the same DVC
 # remote and the same dvc.lock. Queued rather than cancelled, so a genuinely
@@ -70,6 +74,10 @@ jobs:
           M=${{ steps.month.outputs.month }}
           LAST=$(ls data/raw/yellow/*.parquet.dvc | sed 's#.*/##; s#.parquet.dvc##' | sort | tail -1)
           EXPECTED=$(uv run python -c "from tripduration.prepare import next_month; print(next_month('$LAST'))")
+          if [ "${{ inputs.check_only }}" = "true" ]; then
+            echo "check-only dispatch: skipping the contiguity guard"
+            exit 0
+          fi
           if [ "$M" \> "$EXPECTED" ]; then
             echo "::error::$M would leave a gap: the newest ingested month is $LAST, so the next is $EXPECTED."
             echo "Ingest $EXPECTED first, or merge the candidate PR that already contains it."
