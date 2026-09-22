@@ -4,7 +4,7 @@ Tick a line only when its proof command passes, not when the code is written.
 
 | # | Phase | Proof | Done |
 |---|-------|-------|------|
-| 0 | Foundation: repo, uv, layout, Makefile, ci.yml (lint + tests) | `make lint && make test` green locally and in CI; a deliberate failure goes red in CI | [ ] |
+| 0 | Foundation: repo, uv, layout, Makefile, ci.yml (lint + tests) | `make lint && make test` green locally and in CI; a deliberate failure goes red in CI | [x] |
 | 1 | Data in, versioned: ingest + schema normalisation, zone reference, DVC + S3 remote, budget alert first | `dvc pull` on a second checkout retrieves raw months; ingest tests green | [ ] |
 | 2 | Problem, validity, split, features: ADR-0001/2/3/5, validate + prepare, leakage audit | `dvc repro` produces train/val/test with validation reports; leakage/split tests green | [ ] |
 | 3 | Baseline + model + tracking: ADR-0006, train + evaluate, fallback table, Compose mlflow+postgres, reproducibility test | model beats fallback on a later month; run in MLflow UI; `make reproduce` from clean clone (exit 1) | [ ] |
@@ -20,4 +20,6 @@ Tick a line only when its proof command passes, not when the code is written.
 - `uv init --lib`, Python pinned to 3.12 via `.python-version`; `requires-python >= 3.12`.
 - Dev group: pytest, ruff, mypy. Runtime deps are added in the phase that first needs them.
 - `Makefile`: setup, lint, format, test, test-all. Later targets are added when the thing they run exists.
-- `ci.yml`: pending (owner-authored).
+- `ci.yml`: push to main + pull_request; `make setup && make lint && make test` on ubuntu-latest, actions pinned to major tags.
+- Proof: first `main` run green (run 35686636777); PR #1 pushed a deliberately failing test -> red (run 35686689059), then the fix -> green.
+- Follow-up: `actions/checkout@v4` and `setup-uv@v6` target Node 20 (deprecated); bump majors when convenient.
