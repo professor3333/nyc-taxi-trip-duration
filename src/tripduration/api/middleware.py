@@ -52,6 +52,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "status": response.status_code,
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
                 "model_kind": getattr(request.state, "model_kind", None),
+                "prediction_min": getattr(request.state, "prediction", None),
             },
         )
         return response
