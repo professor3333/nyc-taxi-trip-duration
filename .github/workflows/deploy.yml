@@ -9,7 +9,9 @@ name: deploy
 on:
   push:
     branches: [main]
-    paths: [models/champion.json]
+    paths:
+      - models/champion.json        # the pointer: promote or rollback
+      - models/champion_meta.json   # the champion's feature list; also baked in
   workflow_dispatch:
 
 concurrency:
