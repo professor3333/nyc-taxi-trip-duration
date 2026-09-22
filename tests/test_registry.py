@@ -204,3 +204,20 @@ def test_dvc_lock_md5s_reads_outputs() -> None:
     md5s = reg.dvc_lock_md5s(Path(__file__).resolve().parents[1] / "dvc.lock")
     assert "models/model.pkl" in md5s and len(md5s["models/model.pkl"]) == 32
     assert "models/fallback_table.parquet" in md5s
+
+
+def test_promote_never_writes_repo_champion_files(registry: dict[str, Any]) -> None:
+    """Regression: an early version wrote models/champion_meta.json in the repo
+    when meta_file was not passed, which shipped a fixture feature list to the
+    image and degraded the live service."""
+    from tripduration.registry import CHAMPION_FILE, CHAMPION_META_FILE
+
+    before = {
+        p: p.read_bytes() if p.exists() else None
+        for p in (CHAMPION_FILE, CHAMPION_META_FILE)
+    }
+    _promote(registry, registry["add"]())
+    for p, content in before.items():
+        assert (p.read_bytes() if p.exists() else None) == content, (
+            f"{p} was modified by a test"
+        )
