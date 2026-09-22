@@ -92,3 +92,11 @@ Tick a line only when its proof command passes, not when the code is written.
 - `model_meta.json` now records the environment (platform, machine, uv.lock md5, sklearn/pandas/pyarrow/numpy versions, OMP/BLAS thread vars, container id when set), `data_versions` (md5 of every dvc.lock dep and out), `dvc_lock_md5` and explicit `split_boundaries`. MLflow tags carry the same.
 - `evaluate` adds per-route MAE (25 busiest zone pairs) alongside per-hour and per-borough-pair.
 - `docs/reproducibility.md`: what is recorded, the declared tolerance and why, prerequisites, and the transcript.
+
+## Experiment tracking and model management milestone — 2026-09-22
+
+- Release record (`models/champion.json`) now states all four required items: registry version, **training data version** (`train_months` + `dvc_lock_md5`), code commit, evaluation results — plus `fixture_sha256` and `fixture_platform`. `docs/promotions.md` gains the data-version columns.
+- `promote`/`rollback`/`--refresh` rebuild the version's predictions from its own registered artefacts into `models/champion_fixture.csv` (80-row grid). `deploy_check --expect-fixture` replays them against the live service, so "the previous version's predictions are restored" is a check, not a claim.
+- Demonstrated live: rolled back v3 -> v1, deploy.yml green, live matched v1's file exactly (0.0000 min / 80 rows) and failed against v3's (25 rows, max 7.39 min). Restored v3 afterwards.
+- Found and measured: predictions are **architecture-sensitive**. Identical model bytes and features give 24.9627 (arm64) vs 25.3806 (linux/amd64); across the grid mean 0.043 min, max 0.597 min, <=1.98%. Recorded in champion.json, ADR-scale note in docs/reproducibility.md and docs/model_card.md; live tolerance set to 1.0 min with that justification.
+- `promote.py --refresh` rewrites the current champion's record without an alias change (the gate correctly refuses promoting a version to itself). 117 tests.

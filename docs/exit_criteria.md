@@ -65,6 +65,15 @@ the *same* code to AWS Lambda, each verified against the running function:
 | rollback | 1 | `v1` | `deploy.yml` |
 | re-promote | 3 | `v3` | `deploy.yml` |
 
+Since 2026-09-22 the rollback is also verified at the **prediction** level:
+`promote`/`rollback` rebuild the version's predictions from its own
+registered artefacts into `models/champion_fixture.csv`, and
+`deploy_check.py --expect-fixture` replays those 80 rows against the live
+service. After rolling back to v1 the live service matched v1's file exactly
+(0.0000 min over 80 rows) and failed against v3's (25 rows differing, up to
+7.39 min) — the versions are genuinely different models, so the check has
+teeth.
+
 Each `/health` body was obtained with `deploy_check.py --invoke
 nyc-taxi-trip-duration --expect-version vN`, which also re-checked the fixture
 prediction against the offline value (`62.30` for v1, `66.75` for v3 — they
