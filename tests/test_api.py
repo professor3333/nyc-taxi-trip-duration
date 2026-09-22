@@ -107,7 +107,14 @@ def test_predict_happy_path(client: TestClient) -> None:
     r = client.post("/predict", json=GOOD)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"duration_min", "model_version", "model_kind", "request_id"}
+    assert set(body) == {
+        "duration_min",
+        "model_version",
+        "model_kind",
+        "fallback_version",
+        "request_id",
+    }
+    assert body["fallback_version"].startswith("fb-")
     assert body["duration_min"] > 0 and body["model_kind"] == "model"
     assert body["model_version"].startswith(
         "unregistered:deadbeef"
@@ -254,7 +261,10 @@ def test_missing_model_degrades_to_fallback(model_dir: Path, tmp_path: Path) -> 
         r = c.post("/predict", json=GOOD)
         assert r.status_code == 200 and r.json()["model_kind"] == "fallback"
         assert r.json()["model_version"] == "fallback"
-        assert c.get("/ready").status_code == 503
+        assert r.json()["fallback_version"].startswith("fb-")
+        assert c.get("/health/ready").status_code == 503
+        assert c.get("/health/live").status_code == 200  # the process is fine
+        assert c.get("/version").json()["model_kind"] == "fallback"
 
 
 def test_corrupt_model_degrades_and_ready_503(model_dir: Path, tmp_path: Path) -> None:
@@ -278,11 +288,76 @@ def test_feature_list_mismatch_refuses_model(model_dir: Path, tmp_path: Path) ->
         assert h["status"] == "degraded" and "feature list mismatch" in h["load_error"]
 
 
-def test_both_missing_is_a_broken_build(tmp_path: Path) -> None:
+def test_both_missing_serves_controlled_503(tmp_path: Path) -> None:
+    """Neither model nor fallback: the process stays up and says so."""
     (tmp_path / "empty").mkdir()
-    with pytest.raises(FileNotFoundError):
-        with TestClient(create_app(_settings(tmp_path / "empty"))):
-            pass
+    with TestClient(create_app(_settings(tmp_path / "empty"))) as c:
+        live = c.get("/health/live")
+        assert live.status_code == 200 and live.json()["status"] == "live"
+
+        health = c.get("/health").json()
+        assert health["status"] == "unavailable" and health["model_kind"] == "none"
+        assert health["load_error"] and health["fallback_error"]
+        assert health["fallback_version"] == "none"
+
+        ready = c.get("/health/ready")
+        assert ready.status_code == 503 and ready.json()["ready"] is False
+        assert ready.headers["retry-after"] == "30"
+
+        pred = c.post("/predict", json=GOOD)
+        assert pred.status_code == 503
+        body = pred.json()
+        assert body["error"] == "unavailable" and "request_id" in body
+        assert "fallback" in body["detail"]
+
+        # Malformed input is still a 422, not a 503: the request is wrong
+        # regardless of whether anything could have served it.
+        assert c.post("/predict", json={"pickup_zone_id": 999}).status_code == 422
+
+        v = c.get("/version").json()
+        assert v["model_kind"] == "none" and v["model_version"] == "unavailable"
+
+
+def test_endpoint_table(client: TestClient) -> None:
+    """The four endpoints the service contract names, and what each answers."""
+    live = client.get("/health/live")
+    assert live.status_code == 200
+    assert live.json()["status"] == "live" and live.json()["app_version"]
+    assert live.json()["uptime_s"] >= 0
+
+    ready = client.get("/health/ready")
+    assert ready.status_code == 200
+    assert ready.json()["ready"] is True and ready.json()["fixture_duration_min"] > 0
+
+    v = client.get("/version").json()
+    assert set(v) == {
+        "app_version",
+        "api_version",
+        "model_version",
+        "model_kind",
+        "fallback_version",
+        "champion_version",
+        "git_sha",
+        "train_months",
+        "feature_count",
+        "loaded_at",
+    }
+    assert v["model_kind"] == "model" and v["feature_count"] == 12
+    assert v["fallback_version"].startswith("fb-")
+    assert v["train_months"] == ["2024-10"]
+
+    p = client.post("/predict", json=GOOD).json()
+    assert p["duration_min"] > 0 and p["model_kind"] == "model"
+
+
+def test_deprecated_aliases_still_answer(client: TestClient) -> None:
+    """A rollout must never have a window where the old probe paths 404."""
+    assert client.get("/health").status_code == 200
+    assert client.get("/ready").status_code == 200
+    old, new = client.get("/ready").json(), client.get("/health/ready").json()
+    assert {k: v for k, v in old.items() if k != "request_id"} == {
+        k: v for k, v in new.items() if k != "request_id"
+    }
 
 
 def test_champion_version_reported_when_md5_matches(

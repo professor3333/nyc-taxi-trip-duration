@@ -58,7 +58,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PORT=8080 \
     GIT_SHA=${GIT_SHA} \
     AWS_LWA_PORT=8080 \
-    AWS_LWA_READINESS_CHECK_PATH=/health \
+    AWS_LWA_READINESS_CHECK_PATH=/health/live \
     OMP_NUM_THREADS=2
 USER app
 EXPOSE 8080

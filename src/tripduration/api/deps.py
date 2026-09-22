@@ -10,6 +10,7 @@ import pickle
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,7 +31,13 @@ from tripduration.train import FALLBACK_FILE, META_FILE, MODEL_FILE
 
 log = logging.getLogger(__name__)
 
-ModelKind = Literal["model", "fallback"]
+ModelKind = Literal["model", "fallback", "none"]
+
+APP_VERSION = version("tripduration")
+
+
+class ServiceUnavailableError(RuntimeError):
+    """Nothing can serve a prediction: answered as a controlled 503."""
 
 
 @dataclass(frozen=True)
@@ -96,7 +103,13 @@ def _git_sha() -> str:
 
 
 class Predictor:
-    """Model if it loads, fallback table otherwise; both failing is a broken build."""
+    """Model if it loads, packaged fallback table if not, and if neither loads the
+    service stays up and answers 503 — a controlled outage, not a crash loop.
+
+    `kind` is the honest statement of what is serving: "model", "fallback" or
+    "none". `/health/live` is 200 in every case (the process runs);
+    `/health/ready` and `/predict` are 503 when `kind == "none"`.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -129,16 +142,30 @@ class Predictor:
                 exc_info=True,
                 extra={"event": "model_load_failed"},
             )
-        # The fallback table must always load; if it cannot, this raises and
-        # the process exits: that is a broken image, not a runtime condition.
-        self.fallback = FallbackTable.load(settings.model_dir / FALLBACK_FILE)
-        if self.kind == "fallback":
+        self.fallback: FallbackTable | None = None
+        self.fallback_error: str | None = None
+        self.fallback_version = "none"
+        try:
+            self.fallback = FallbackTable.load(settings.model_dir / FALLBACK_FILE)
+            self.fallback_version = self.fallback.version
+        except Exception as e:
+            self.fallback_error = f"{type(e).__name__}: {e}"
+            log.error(
+                "fallback table failed to load",
+                exc_info=True,
+                extra={"event": "fallback_load_failed"},
+            )
+        if self.kind == "fallback" and self.fallback is None:
+            self.kind = "none"
+            self.model_version = "unavailable"
+        elif self.kind == "fallback":
             fb_md5 = _md5(settings.model_dir / FALLBACK_FILE)
             self.model_version = (
                 f"fallback-v{champion['version']}"
                 if champion and champion.get("fallback_md5") == fb_md5
                 else "fallback"
             )
+        self.champion_version = f"v{champion['version']}" if champion else None
 
     @staticmethod
     def _read_champion(path: Path) -> dict[str, Any] | None:
@@ -160,18 +187,32 @@ class Predictor:
         return model, meta
 
     @property
-    def status(self) -> Literal["ok", "degraded"]:
-        return "ok" if self.kind == "model" else "degraded"
+    def status(self) -> Literal["ok", "degraded", "unavailable"]:
+        if self.kind == "model":
+            return "ok"
+        return "degraded" if self.kind == "fallback" else "unavailable"
+
+    @property
+    def ready(self) -> bool:
+        """Can this process answer a prediction at all?"""
+        return self.kind != "none"
 
     def predict(
         self, pu: list[int], do: list[int], departure: list[datetime]
     ) -> np.ndarray:
+        if self.kind == "none" or (self.kind == "fallback" and self.fallback is None):
+            raise ServiceUnavailableError(
+                "neither the model nor the fallback table could be loaded: "
+                f"model={self.load_error}; fallback={self.fallback_error}"
+            )
         frame = pd.DataFrame({PU: pu, DO: do, DEPARTURE: pd.to_datetime(departure)})
         if self.kind == "model":
             x = build_features(frame, self.ref)
             pred = self.model.predict(x)
-        else:
+        elif self.fallback is not None:
             pred, _ = self.fallback.predict(frame, self.ref)
+        else:  # pragma: no cover - guarded above
+            raise ServiceUnavailableError("no predictor loaded")
         pred = np.asarray(pred, dtype=float)
         if not np.all(np.isfinite(pred)):
             raise ValueError("non-finite prediction")
