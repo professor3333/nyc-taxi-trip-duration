@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-from tripduration.registry import RegistryError, promote, rollback, summary
+from tripduration.registry import RegistryError, promote, refresh, rollback, summary
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -21,6 +21,11 @@ if __name__ == "__main__":
     g.add_argument("--version", type=int)
     g.add_argument("--rollback", action="store_true")
     g.add_argument("--status", action="store_true")
+    g.add_argument(
+        "--refresh",
+        action="store_true",
+        help="rewrite the current champion's release record; no alias change",
+    )
     ap.add_argument("--reason", default="")
     ap.add_argument(
         "--force", action="store_true", help="bypass the gate; recorded as FORCED"
@@ -28,7 +33,10 @@ if __name__ == "__main__":
     args = ap.parse_args()
     uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001")
     try:
-        if args.status:
+        if args.refresh:
+            s = refresh(uri)
+            print(f"release record refreshed for v{s.version} (aliases unchanged)")
+        elif args.status:
             print(json.dumps(summary(uri), indent=2))
         elif args.rollback:
             if not args.reason:

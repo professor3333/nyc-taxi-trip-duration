@@ -12,6 +12,7 @@ on:
     paths:
       - models/champion.json        # the pointer: promote or rollback
       - models/champion_meta.json   # the champion's feature list; also baked in
+      - models/champion_fixture.csv # this version's predictions, checked after deploy
   workflow_dispatch:
 
 concurrency:
@@ -83,5 +84,6 @@ jobs:
           # Lambda API reaches the same container through the same adapter.
           uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
             --expect-version ${{ steps.champ.outputs.version }} \
+            --expect-fixture models/champion_fixture.csv \
             --models-dir build/champion/models --reference-dir build/champion/reference \
             --malformed --cold --n 5

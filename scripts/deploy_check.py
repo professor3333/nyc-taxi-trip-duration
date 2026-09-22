@@ -3,6 +3,8 @@
     uv run python scripts/deploy_check.py --url http://localhost:8080
     uv run python scripts/deploy_check.py --url $URL --sigv4   # IAM-auth URL
     uv run python scripts/deploy_check.py --invoke my-function  # via the Lambda API
+    uv run python scripts/deploy_check.py --invoke fn \
+        --expect-fixture models/champion_fixture.csv   # predictions restored?
     uv run python scripts/deploy_check.py --url $URL --expect-version v1
     uv run python scripts/deploy_check.py --url $URL --malformed     # exit criterion 5
     uv run python scripts/deploy_check.py --url $URL --cold --n 5    # cold-start p95
@@ -16,6 +18,7 @@ any failure; prints a transcript.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import statistics
 import sys
@@ -210,6 +213,16 @@ def main() -> int:
         action="store_true",
         help="sign requests (Function URL with AWS_IAM auth)",
     )
+    ap.add_argument(
+        "--expect-fixture",
+        type=Path,
+        help="CSV of the champion's predictions; the live service must match it",
+    )
+    # Default 1.0 min: predictions are architecture-sensitive (training on
+    # arm64, serving on x86_64 differ by mean 0.043 / max 0.597 min over this
+    # grid — docs/reproducibility.md). Pass 1e-9 when both sides are the same
+    # architecture, which is the stricter and preferable check.
+    ap.add_argument("--fixture-tolerance", type=float, default=1.0)
     ap.add_argument("--allow-degraded", action="store_true")
     ap.add_argument(
         "--malformed",
@@ -284,6 +297,40 @@ def main() -> int:
             f"malformed: {name}",
             status == 422 and has_rid,
             f"HTTP {status} {_short(resp)}",
+        )
+
+    if args.expect_fixture:
+        rows = list(csv.DictReader(args.expect_fixture.open()))
+        worst, mismatches = 0.0, 0
+        for row in rows:
+            body = json.dumps(
+                {
+                    "pickup_zone_id": int(row["pu_location_id"]),
+                    "dropoff_zone_id": int(row["do_location_id"]),
+                    "departure_time": row["departure_time"].replace(" ", "T"),
+                }
+            ).encode()
+            st, resp, _ = call(f"{base}/predict", "POST", body, sigv4=sign, function=fn)
+            got = (
+                float(resp["duration_min"])
+                if isinstance(resp, dict) and st == 200
+                else float("nan")
+            )
+            want = round(float(row["model_min"]), 2)
+            diff = abs(got - want)
+            worst = max(worst, diff if diff == diff else float("inf"))
+            if not (diff <= args.fixture_tolerance):
+                mismatches += 1
+                if mismatches <= 3:
+                    print(
+                        f"      row {row['pu_location_id']}->{row['do_location_id']} "
+                        f"{row['departure_time']}: live {got} vs recorded {want}"
+                    )
+        check(
+            f"predictions match {args.expect_fixture.name}",
+            mismatches == 0,
+            f"{len(rows)} rows, {mismatches} mismatched, "
+            f"largest difference {worst:.4f} min",
         )
 
     if args.cold:

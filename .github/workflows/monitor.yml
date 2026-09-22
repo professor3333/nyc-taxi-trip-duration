@@ -32,7 +32,8 @@ jobs:
         continue-on-error: true
         run: |
           uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
-            --expect-version "v$(jq -r .version models/champion.json)" --malformed 2>&1 | tee check.txt \
+            --expect-version "v$(jq -r .version models/champion.json)" \
+            --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt \
             || echo "failed=true" >> "$GITHUB_OUTPUT"
 
       - name: Open or update issue

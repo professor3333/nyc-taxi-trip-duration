@@ -4,6 +4,7 @@ promote -> rollback round trip, alias/file consistency."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,11 @@ import pytest
 from mlflow import MlflowClient
 
 from tripduration import registry as reg
+from tripduration.config import Params
 from tripduration.registry import ChampionState, Gate, RegistryError, promotion_gate
 
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_CENTROIDS = ROOT / "tests" / "fixtures" / "zone_centroids.csv"
 MODEL = "test-model"
 
 
@@ -65,8 +69,51 @@ def test_gate_uses_champion_prospective_mae_when_months_differ() -> None:
 # --- against a real (sqlite) registry ------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def tiny_artefacts(tmp_path_factory: pytest.TempPathFactory, params: Params) -> Path:
+    """A real (tiny) model + fallback table, so promote/rollback exercise the
+    genuine path: they rebuild each version's predictions from its artefacts."""
+    import numpy as np
+    import pandas as pd
+
+    from tripduration import train
+    from tripduration.features import DEPARTURE, DO, PU, ReferenceData, build_features
+
+    out = tmp_path_factory.mktemp("artefacts")
+    ref = ReferenceData.load(
+        FIXTURE_CENTROIDS,
+        ROOT / "configs" / "holidays.csv",
+    )
+    rng = np.random.default_rng(3)
+    n = 3000
+    frame = pd.DataFrame(
+        {
+            PU: rng.integers(1, 264, n),
+            DO: rng.integers(1, 264, n),
+            DEPARTURE: pd.to_datetime("2024-10-01")
+            + pd.to_timedelta(rng.integers(0, 30 * 1440, n), "min"),
+        }
+    )
+    feats = build_features(frame, ref)
+    frame = pd.concat([feats, frame], axis=1)
+    frame["duration_min"] = 5 + 2.0 * feats["centroid_dist_km"] + rng.normal(0, 1, n)
+    p = replace(params, n_threads=1, model={**params.model, "max_iter": 10})
+    model, fb, _ = train.fit_all(frame, p, ref)
+    train.write_artifacts(
+        out, model, fb, {"feature_columns": [], "train_months": ["2024-10"]}
+    )
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _reference_from_fixtures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The repo's data/reference/ is DVC-tracked and absent in CI."""
+    monkeypatch.setattr(reg, "REFERENCE_CSV", FIXTURE_CENTROIDS)
+    monkeypatch.setattr(reg, "HOLIDAYS_CSV", ROOT / "configs" / "holidays.csv")
+
+
 @pytest.fixture
-def registry(tmp_path: Path) -> dict[str, Any]:
+def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
     uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
     mlflow.set_tracking_uri(uri)
     client = MlflowClient()
@@ -75,12 +122,16 @@ def registry(tmp_path: Path) -> dict[str, Any]:
 
     def add_version(**tags: Any) -> int:
         with mlflow.start_run(experiment_id=exp.experiment_id) as run:
-            # promote()/rollback() copy this artefact into models/champion_meta.json
+            # promote()/rollback() read these: model_meta.json becomes
+            # models/champion_meta.json, and the model + table are what the
+            # champion's fixture predictions are recomputed from.
             meta = tmp_path / "model_meta.json"
             meta.write_text(
                 json.dumps({"feature_columns": ["a", "b"], "train_months": ["2024-10"]})
             )
             mlflow.log_artifact(str(meta), artifact_path="models")
+            for name in ("model.pkl", "fallback_table.parquet"):
+                mlflow.log_artifact(str(tiny_artefacts / name), artifact_path="models")
             src = f"{run.info.artifact_uri}/models"
         mv = client.create_model_version(
             MODEL, source=src, run_id=run.info.run_id, tags=_tags(**tags)
@@ -94,6 +145,7 @@ def registry(tmp_path: Path) -> dict[str, Any]:
         "file": tmp_path / "champion.json",
         "log": tmp_path / "promotions.md",
         "meta": tmp_path / "champion_meta.json",
+        "fixture": tmp_path / "champion_fixture.csv",
     }
 
 
@@ -105,6 +157,7 @@ def _rollback(r: dict[str, Any], **kw: Any) -> ChampionState:
         champion_file=r["file"],
         log_path=r["log"],
         meta_file=r["meta"],
+        fixture_file=r["fixture"],
         **kw,
     )
 
@@ -118,6 +171,7 @@ def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
         champion_file=r["file"],
         log_path=r["log"],
         meta_file=r["meta"],
+        fixture_file=r["fixture"],
         **kw,
     )
 
@@ -146,6 +200,43 @@ def test_promote_then_rollback_round_trip(registry: dict[str, Any]) -> None:
     log = r["log"].read_text()
     assert log.count("| promote |") == 2 and log.count("| rollback |") == 1
     assert "deploy check failed" in log
+
+
+def test_release_record_and_restored_predictions(registry: dict[str, Any]) -> None:
+    """The milestone's criterion: select the previous version, and its
+    predictions come back exactly."""
+    import csv
+
+    r = registry
+    v1 = r["add"](mae_test_model=4.7, train_months="2024-10", dvc_lock_md5="a" * 32)
+    v2 = r["add"](
+        mae_test_model=4.5, train_months="2024-10,2024-11", dvc_lock_md5="b" * 32
+    )
+
+    s1 = _promote(r, v1, reason="first")
+    rows_v1 = r["fixture"].read_text()
+    # the release record carries the training data version, not just the model
+    assert s1.train_months == ("2024-10",) and s1.dvc_lock_md5 == "a" * 32
+    assert s1.fixture_sha256 and len(s1.fixture_sha256) == 64
+
+    s2 = _promote(r, v2, reason="better")
+    assert s2.train_months == ("2024-10", "2024-11") and s2.dvc_lock_md5 == "b" * 32
+
+    s3 = _rollback(r, reason="restore v1")
+    assert s3.version == v1
+    # Byte-for-byte the predictions v1 produced when it was first promoted.
+    assert r["fixture"].read_text() == rows_v1
+    assert s3.fixture_sha256 == s1.fixture_sha256
+    assert s3.train_months == s1.train_months and s3.dvc_lock_md5 == s1.dvc_lock_md5
+
+    rows = list(csv.DictReader(r["fixture"].open()))
+    assert len(rows) == 80
+    assert {"pu_location_id", "do_location_id", "departure_time", "model_min"} <= set(
+        rows[0]
+    )
+
+    log = r["log"].read_text()
+    assert "2024-10,2024-11" in log and "aaaaaaaa" in log  # data version in the log
 
 
 def test_promote_refuses_when_gate_fails_unless_forced(
@@ -205,11 +296,15 @@ def test_promote_never_writes_repo_champion_files(registry: dict[str, Any]) -> N
     """Regression: an early version wrote models/champion_meta.json in the repo
     when meta_file was not passed, which shipped a fixture feature list to the
     image and degraded the live service."""
-    from tripduration.registry import CHAMPION_FILE, CHAMPION_META_FILE
+    from tripduration.registry import (
+        CHAMPION_FILE,
+        CHAMPION_FIXTURE_FILE,
+        CHAMPION_META_FILE,
+    )
 
     before = {
         p: p.read_bytes() if p.exists() else None
-        for p in (CHAMPION_FILE, CHAMPION_META_FILE)
+        for p in (CHAMPION_FILE, CHAMPION_META_FILE, CHAMPION_FIXTURE_FILE)
     }
     _promote(registry, registry["add"]())
     for p, content in before.items():
