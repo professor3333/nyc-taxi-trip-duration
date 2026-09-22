@@ -1,0 +1,14 @@
+{
+  "fallback_md5": "16cc9d09ae9eab8dc0e385036719e405",
+  "git_sha": "49fb1c0dee239a8f55462678fc5f1618497ffccb",
+  "mae_test_fallback": 5.111258,
+  "mae_test_model": 4.688721,
+  "model_md5": "2c521291dc8cef52dcca29988bb00699",
+  "model_name": "nyc-taxi-trip-duration",
+  "previous_version": null,
+  "promoted_at": "2026-09-22T05:54:08+00:00",
+  "reason": "first champion: beats fallback on 2024-12 (4.689 vs 5.111)",
+  "run_id": "502fe6e4792644b1a5b141b4c163cf9f",
+  "test_month": "2024-12",
+  "version": 1
+}
