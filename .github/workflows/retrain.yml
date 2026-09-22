@@ -61,6 +61,25 @@ jobs:
           fi
           echo "month=$M" >> "$GITHUB_OUTPUT"; echo "ingesting $M"
 
+      # ADR-0003 requires a contiguous month sequence, and `prepare` refuses a
+      # gap. Check before downloading 70 MB: a dispatch that would create one
+      # (e.g. asking for 2025-03 while 2025-02 is still an unmerged candidate)
+      # should fail in two seconds with the reason, not after ingest.
+      - name: Refuse a month that would leave a gap
+        run: |
+          M=${{ steps.month.outputs.month }}
+          LAST=$(ls data/raw/yellow/*.parquet.dvc | sed 's#.*/##; s#.parquet.dvc##' | sort | tail -1)
+          EXPECTED=$(uv run python -c "from tripduration.prepare import next_month; print(next_month('$LAST'))")
+          if [ "$M" \> "$EXPECTED" ]; then
+            echo "::error::$M would leave a gap: the newest ingested month is $LAST, so the next is $EXPECTED."
+            echo "Ingest $EXPECTED first, or merge the candidate PR that already contains it."
+            exit 1
+          fi
+          if [ -f "data/raw/yellow/$M.parquet.dvc" ]; then
+            echo "$M is already ingested on this branch; nothing to do."
+            exit 0
+          fi
+
       - name: Ingest (404 = not published yet, exits 0)
         id: ingest
         run: |
