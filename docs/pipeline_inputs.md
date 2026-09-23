@@ -15,9 +15,9 @@ stage's output, or `dvc repro` reports stale outputs as up to date.
 
 | stage | code (transitive imports) | files | params | environment |
 |---|---|---|---|---|
-| validate | validate, ingest, config | `configs/schema_raw.yaml`, `${data.raw_dir}` | `data.raw_dir`, `data.validated_dir`, `data.timezone`, `validity` | `uv.lock`, `.python-version` |
-| quality | quality, validate, ingest, config | `configs/schema_raw.yaml`, `${data.raw_dir}`, `${data.validated_dir}` | `data.raw_dir`, `data.validated_dir`, `quality` | same |
-| prepare | prepare, features, schema, config, **validate, ingest** | `configs/holidays.csv`, `${data.reference_dir}/zone_centroids.csv`, `${data.validated_dir}`, `reports/quality` | `seed`, `split`, **`data.validated_dir`, `data.reference_dir`** | same |
+| validate | validate, raw_schema, config | `configs/schema_raw.yaml`, `${data.raw_dir}` | `data.raw_dir`, `data.validated_dir`, `data.timezone`, `validity` | `uv.lock`, `.python-version` |
+| quality | quality, validate, raw_schema, config | `configs/schema_raw.yaml`, `${data.raw_dir}`, `${data.validated_dir}` | `data.raw_dir`, `data.validated_dir`, `quality` | same |
+| prepare | prepare, features, schema, config, **validate, raw_schema** | `configs/holidays.csv`, `${data.reference_dir}/zone_centroids.csv`, `${data.validated_dir}`, `reports/quality` | `seed`, `split`, **`data.validated_dir`, `data.reference_dir`** | same |
 | train | train, fallback, features, config | `configs/holidays.csv`, `${data.reference_dir}/zone_centroids.csv`, processed train/val, `reports/prepare.json` | `seed`, `n_threads`, `fallback`, `model`, `mlflow`, **`data.reference_dir`** | same |
 | evaluate | evaluate, fallback, features, **config, train** | `configs/holidays.csv`, `${data.reference_dir}/zone_centroids.csv`, processed val/test, model artefacts | **`data.reference_dir`** | same |
 
@@ -96,7 +96,8 @@ its origin (G8). None of them changes `model.pkl`:
 | `.python-version` | all five |
 | `src/tripduration/config.py` | all five |
 | `data.reference_dir` | prepare, train, evaluate |
-| `src/tripduration/ingest.py` | validate, quality, prepare |
+| `src/tripduration/raw_schema.py` | validate, quality, prepare |
+| `src/tripduration/ingest.py` (download code) | none: no stage imports it |
 | `src/tripduration/train.py` | train, evaluate |
 | `data.timezone`, `validity.*` | validate |
 | `quality.*` | quality |

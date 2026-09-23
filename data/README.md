@@ -13,7 +13,8 @@ DVC's remote. After cloning:
 |---|---|---|
 | `raw/yellow/YYYY-MM.parquet` | **Immutable copy** of TLC's monthly file, byte-for-byte as served | `reports/ingest/yellow-YYYY-MM.json` (`source_md5`, `etag`, `bytes`, `rows`, source schema) |
 | `reference/taxi_zone_lookup.csv` | TLC zone lookup, byte-for-byte | `reports/ingest/zones.json` |
-| `validated/`, `processed/` | pipeline outputs (not yet built) | `dvc.lock` |
+| `validated/`, `processed/` | pipeline outputs | `dvc.lock` |
+| `quarantine/` | downloads being checked, or refused (schema drift, not Parquet); never tracked | the ERROR log line that refused it |
 
 Raw files are **not** normalised: column names and dtypes are exactly what TLC
 published. The rename/cast to the canonical schema in `configs/schema_raw.yaml`

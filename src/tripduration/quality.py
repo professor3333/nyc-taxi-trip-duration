@@ -27,7 +27,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from tripduration.config import Params, QualityParams, load_params
-from tripduration.ingest import RawSchema, load_schema, normalise
+from tripduration.raw_schema import RawSchema, load_schema, normalise
 from tripduration.validate import DO, DURATION, PU, add_duration
 
 log = logging.getLogger(__name__)

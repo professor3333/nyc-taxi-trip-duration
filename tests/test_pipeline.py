@@ -20,7 +20,7 @@ from tripduration import evaluate, prepare, train, validate
 from tripduration.config import Params
 from tripduration.fallback import FallbackTable
 from tripduration.features import FEATURE_COLUMNS, ReferenceData
-from tripduration.ingest import RawSchema
+from tripduration.raw_schema import RawSchema
 from tripduration.schema import POST_TRIP_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[1]

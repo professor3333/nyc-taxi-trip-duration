@@ -3,20 +3,34 @@
 ``data/raw/`` holds **immutable copies**: exactly the bytes CloudFront served,
 so a snapshot can be verified against TLC's own file forever, independently of
 later changes to our code. Ingest never rewrites those bytes. It does inspect
-the file's schema against ``configs/schema_raw.yaml`` and refuses to store a
-file with an unknown or missing-required column, so drift is caught on the day
-it appears, in a reviewed config change — never absorbed silently. The
-rename/cast to the canonical schema (``normalise``) is applied downstream by
-the first pipeline stage, not here.
+the file's schema against ``configs/schema_raw.yaml`` (``raw_schema``) and
+refuses to store a file with an unknown or missing-required column, so drift
+is caught on the day it appears, in a reviewed config change — never absorbed
+silently. The rename/cast to the canonical schema (``normalise``) is applied
+downstream by the first pipeline stage, not here.
+
+**The accepted snapshot is only ever replaced by a checked one.** Every
+download lands in ``data/quarantine/``; only after its size and schema pass is
+it moved over ``data/raw/`` with an atomic rename. A download that fails
+(interrupted, truncated, not Parquet, schema drift) leaves the previous file
+and its report exactly as they were; the rejected bytes stay in quarantine for
+inspection.
 
 Idempotent: a HEAD request compares ``ETag``/``Content-Length`` with the last
-report; an unchanged month is skipped without downloading. A changed month is
-a TLC republish, downloaded and recorded with the md5 it replaced.
+report, and the local file's md5 with the one recorded. Only when all three
+agree is the download skipped. A local file that is missing or no longer
+matches its recorded md5 is fetched again. A changed remote is a TLC
+republish, downloaded and recorded with the md5 it replaced.
 
-A month TLC has not published yet (HTTP 404) is a distinct, expected condition
-(``MonthNotPublishedError``); the CLI turns it into a clean exit 0. Transient
-failures (5xx, 429, network errors, short reads) are retried with backoff;
-anything else propagates.
+A month TLC has not published yet is a distinct, expected condition
+(``MonthNotPublishedError``); the CLI turns it into a clean exit 0. TLC's
+CloudFront answers 403 (not 404) for a missing key, and a 403 is also what a
+broken source looks like, so a 403/404 is only read as "not published" when
+(1) the month has never been ingested, (2) it is inside the publication-lag
+window, and (3) a control object on the same distribution still answers.
+Otherwise it is a ``SourceAccessError`` and exits non-zero. Transient failures
+(5xx, 429, network errors, short reads) are retried with backoff; anything
+else propagates.
 """
 
 from __future__ import annotations
@@ -27,34 +41,40 @@ import hashlib
 import http.client
 import json
 import logging
-import re
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
-import yaml
+
+from tripduration.raw_schema import (
+    MONTH_RE,
+    RawSchema,
+    SchemaDriftError,
+    check_schema,
+    load_schema,
+)
 
 log = logging.getLogger(__name__)
 
-MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 TIMEOUT_S = 60
 RETRIES = 3
 BACKOFF_S = 2.0
 
-_ARROW_TYPES: dict[str, pa.DataType] = {
-    "int64": pa.int64(),
-    "float64": pa.float64(),
-    "string": pa.string(),
-    "timestamp[us]": pa.timestamp("us"),
-}
+# How many calendar months after month M TLC may still not have published it.
+# Measured 2026-09-23 from CloudFront Last-Modified: 2026-03 on 04-28 (1),
+# 2026-04 on 06-05 (2), 2026-05 on 06-26 (1), 2026-06 and 2026-07 on 09-17
+# (3 and 2). The worst is 3; 4 leaves a month of margin. A month older than
+# this that answers 403/404 is not "not published yet": it was withdrawn, never
+# existed, or the source is failing — all of which need a human.
+MAX_PUBLICATION_LAG_MONTHS = 4
 
 # Anything that behaves like urllib.request.urlopen: takes a URL or Request and
 # returns a context manager whose value has .read(n) and .headers. Injected so
@@ -67,51 +87,31 @@ _default_opener: Opener = functools.partial(urllib.request.urlopen, timeout=TIME
 
 # TLC's CloudFront distribution sits in front of S3 without s3:ListBucket, so
 # a key that does not exist comes back as 403, not 404 — verified against
-# 2026-08, 2099-01 and a nonsense path, all 403, while 2025-03 is 200. There
-# is no authentication on these URLs, so a 403 cannot mean "not allowed"; it
-# means "not there". Treating only 404 as unpublished made the weekly check
-# fail every Monday until a month appeared.
-NOT_PUBLISHED_CODES = frozenset({403, 404})
+# 2026-08, 2099-01 and a nonsense path, all 403, while 2025-03 is 200. The
+# same 403 is what a revoked or broken origin returns, so neither code is
+# conclusive on its own: ``_classify_absent`` decides.
+ABSENT_CODES = frozenset({403, 404})
+
+
+class NotFoundAtSourceError(Exception):
+    """The source answered 403/404. Not yet a verdict: see ``_classify_absent``."""
+
+    def __init__(self, code: int, url: str) -> None:
+        super().__init__(f"HTTP {code} at {url}")
+        self.code = code
+        self.url = url
 
 
 class MonthNotPublishedError(Exception):
-    """TLC has not published this month yet (403 or 404 from CloudFront)."""
+    """TLC has not published this month yet (403/404, and nothing says otherwise)."""
 
 
-class SchemaDriftError(ValueError):
-    """The file's columns do not match configs/schema_raw.yaml."""
+class SourceAccessError(RuntimeError):
+    """The source refused something that should exist: not an unpublished month."""
 
 
 class IncompleteDownloadError(OSError):
     """Bytes received differ from the Content-Length the server declared."""
-
-
-@dataclass(frozen=True)
-class ColumnSpec:
-    name: str
-    dtype: pa.DataType
-    variants: tuple[str, ...]
-    optional: bool
-
-
-@dataclass(frozen=True)
-class RawSchema:
-    columns: tuple[ColumnSpec, ...]
-    trip_url_template: str
-    zone_lookup_url: str
-    zone_lookup_columns: tuple[str, ...]
-
-    def variant_map(self) -> dict[str, str]:
-        """Every accepted spelling -> canonical name (canonical maps to itself)."""
-        out: dict[str, str] = {}
-        for col in self.columns:
-            out[col.name] = col.name
-            for v in col.variants:
-                out[v] = col.name
-        return out
-
-    def arrow_schema(self) -> pa.Schema:
-        return pa.schema([pa.field(c.name, c.dtype) for c in self.columns])
 
 
 @dataclass(frozen=True)
@@ -120,33 +120,12 @@ class RemoteInfo:
     content_length: int | None
 
 
-def load_schema(path: Path) -> RawSchema:
-    with path.open() as fh:
-        raw = yaml.safe_load(fh)
-    cols = tuple(
-        ColumnSpec(
-            name=name,
-            dtype=_ARROW_TYPES[spec["dtype"]],
-            variants=tuple(spec.get("variants", ())),
-            optional=bool(spec.get("optional", False)),
-        )
-        for name, spec in raw["columns"].items()
-    )
-    src = raw["source"]
-    return RawSchema(
-        columns=cols,
-        trip_url_template=src["trip_url_template"],
-        zone_lookup_url=src["zone_lookup_url"],
-        zone_lookup_columns=tuple(src["zone_lookup_columns"]),
-    )
-
-
 # --- HTTP -------------------------------------------------------------------
 
 
 def _is_transient(exc: BaseException) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
-        if exc.code in NOT_PUBLISHED_CODES:
+        if exc.code in ABSENT_CODES:
             return False
         return exc.code == 429 or exc.code >= 500
     return isinstance(
@@ -169,15 +148,15 @@ def _with_retries(
 ) -> Any:
     """Call ``fn`` up to ``retries + 1`` times, sleeping backoff * 2**n between.
 
-    Only transient failures are retried. A 404 is raised immediately as
-    ``MonthNotPublishedError``; any other non-transient error propagates at once.
+    Only transient failures are retried. A 403/404 is raised immediately as
+    ``NotFoundAtSourceError``; any other non-transient error propagates at once.
     """
     for attempt in range(retries + 1):
         try:
             return fn()
         except urllib.error.HTTPError as e:
-            if e.code in NOT_PUBLISHED_CODES:
-                raise MonthNotPublishedError(f"HTTP {e.code} at {e.url}") from e
+            if e.code in ABSENT_CODES:
+                raise NotFoundAtSourceError(e.code, str(e.url)) from e
             if not _is_transient(e) or attempt == retries:
                 raise
             err: BaseException = e
@@ -210,18 +189,112 @@ def head(url: str, *, opener: Opener = _default_opener) -> RemoteInfo:
     )
 
 
+def _months_between(month: str, today: date) -> int:
+    """Calendar months from ``month`` (YYYY-MM) to ``today``'s month."""
+    year, mon = (int(x) for x in month.split("-"))
+    return (today.year - year) * 12 + (today.month - mon)
+
+
+def _classify_absent(
+    err: NotFoundAtSourceError,
+    month: str,
+    schema: RawSchema,
+    *,
+    ingested_at: str | None,
+    today: date,
+    max_lag_months: int,
+    opener: Opener,
+    sleep: Sleeper,
+) -> MonthNotPublishedError | SourceAccessError:
+    """Decide whether a 403/404 for ``month`` means "not published yet".
+
+    Each rule rules out one way a broken source could pass for a missing month:
+    a month we already hold cannot become unpublished; a month past the
+    publication window is overdue, not pending; and if a file that always
+    exists (the zone lookup) fails too, the source itself is failing.
+    """
+    if ingested_at is not None:
+        return SourceAccessError(
+            f"{err}, but {month} was ingested at {ingested_at}: TLC withdrew it "
+            "or access to the source is broken"
+        )
+    lag = _months_between(month, today)
+    if lag > max_lag_months:
+        return SourceAccessError(
+            f"{err}: {month} is {lag} months before {today:%Y-%m}; TLC publishes "
+            f"within {max_lag_months}, so it is missing, not pending"
+        )
+    control = schema.zone_lookup_url
+    try:
+        _with_retries(
+            lambda: head(control, opener=opener), what=f"HEAD {control}", sleep=sleep
+        )
+    except Exception as e:  # any failure of the control means the source is down
+        return SourceAccessError(
+            f"{err}, and the control object {control} also fails ({e}): the source "
+            "is unreachable, which says nothing about whether the month exists"
+        )
+    return MonthNotPublishedError(
+        f"{err}; control object reachable, {month} within the "
+        f"{max_lag_months}-month publication window"
+    )
+
+
+def _head_month(
+    url: str,
+    month: str,
+    schema: RawSchema,
+    *,
+    ingested_at: str | None,
+    today: date,
+    max_lag_months: int,
+    opener: Opener,
+    sleep: Sleeper,
+) -> RemoteInfo:
+    try:
+        info: RemoteInfo = _with_retries(
+            lambda: head(url, opener=opener), what=f"HEAD {url}", sleep=sleep
+        )
+    except NotFoundAtSourceError as e:
+        raise _classify_absent(
+            e,
+            month,
+            schema,
+            ingested_at=ingested_at,
+            today=today,
+            max_lag_months=max_lag_months,
+            opener=opener,
+            sleep=sleep,
+        ) from e
+    return info
+
+
 def is_published(
     service: str,
     month: str,
     schema: RawSchema,
     *,
+    today: date | None = None,
+    max_lag_months: int = MAX_PUBLICATION_LAG_MONTHS,
     opener: Opener = _default_opener,
     sleep: Sleeper = time.sleep,
 ) -> bool:
-    """HEAD only: has TLC published this month? Downloads and writes nothing."""
+    """HEAD only: has TLC published this month? Downloads and writes nothing.
+
+    Raises ``SourceAccessError`` when the answer cannot be "not yet".
+    """
     url = schema.trip_url_template.format(service=service, month=month)
     try:
-        _with_retries(lambda: head(url, opener=opener), what=f"HEAD {url}", sleep=sleep)
+        _head_month(
+            url,
+            month,
+            schema,
+            ingested_at=None,
+            today=today or date.today(),
+            max_lag_months=max_lag_months,
+            opener=opener,
+            sleep=sleep,
+        )
     except MonthNotPublishedError:
         return False
     return True
@@ -258,56 +331,22 @@ def download(
     return md5.hexdigest(), size
 
 
-# --- schema -----------------------------------------------------------------
-
-
-def check_schema(schema_in: pa.Schema, schema: RawSchema) -> dict[str, Any]:
-    """Compare a file's schema with the canonical config without touching data.
-
-    Returns what ``normalise`` would do (mapping, missing optional columns) for
-    the report. Raises ``SchemaDriftError`` on an unknown column or a missing
-    required one.
-    """
-    vmap = schema.variant_map()
-    seen = list(schema_in.names)
-    unknown = [c for c in seen if c not in vmap]
-    if unknown:
-        raise SchemaDriftError(
-            f"unknown column(s) {unknown}; add to configs/schema_raw.yaml if legitimate"
+def _download_to_quarantine(
+    url: str, quarantine: Path, *, opener: Opener, sleep: Sleeper
+) -> tuple[str, int]:
+    """Download with retries into ``quarantine``. A 403/404 here comes after a
+    successful HEAD (or for an object that must exist), so it is an access
+    failure, never "not published"."""
+    quarantine.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result: tuple[str, int] = _with_retries(
+            lambda: download(url, quarantine, opener=opener),
+            what=f"GET {url}",
+            sleep=sleep,
         )
-    mapped = {c: vmap[c] for c in seen}
-    present = set(mapped.values())
-    missing_required = [
-        c.name for c in schema.columns if not c.optional and c.name not in present
-    ]
-    if missing_required:
-        raise SchemaDriftError(f"required column(s) missing: {missing_required}")
-    missing_optional = [c.name for c in schema.columns if c.name not in present]
-    return {
-        "columns_seen": seen,
-        "source_schema": {f.name: str(f.type) for f in schema_in},
-        "canonical_map": {c: v for c, v in mapped.items() if c != v},
-        "missing_optional": missing_optional,
-    }
-
-
-def normalise(table: pa.Table, schema: RawSchema) -> tuple[pa.Table, dict[str, Any]]:
-    """Rename to canonical names, add missing optional columns as null, cast.
-
-    Pure: used by the first pipeline stage, not by ingest. Never drops or
-    reorders rows. Raises ``SchemaDriftError`` via ``check_schema``.
-    """
-    info = check_schema(table.schema, schema)
-    vmap = schema.variant_map()
-    table = table.rename_columns([vmap[c] for c in table.column_names])
-    for name in info["missing_optional"]:
-        dtype = next(c.dtype for c in schema.columns if c.name == name)
-        table = table.append_column(name, pa.nulls(table.num_rows).cast(dtype))
-    # Canonical order, then a *safe* cast: a value that would not survive the
-    # cast (e.g. a fractional passenger_count) raises instead of being altered.
-    table = table.select([c.name for c in schema.columns])
-    table = table.cast(schema.arrow_schema(), safe=True)
-    return table, info
+    except NotFoundAtSourceError as e:
+        raise SourceAccessError(f"GET refused: {e}") from e
+    return result
 
 
 # --- reports ----------------------------------------------------------------
@@ -321,6 +360,16 @@ def _md5_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _local_problem(path: Path, recorded_md5: str | None) -> str | None:
+    """Why the local copy cannot be reused, or None when it is intact."""
+    if not path.exists():
+        return "missing"
+    actual = _md5_file(path)
+    if actual != recorded_md5:
+        return f"md5 {actual} != recorded {recorded_md5}"
+    return None
+
+
 def _read_report(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -330,7 +379,9 @@ def _read_report(path: Path) -> dict[str, Any] | None:
 
 def _write_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
 
 
 def _now() -> str:
@@ -348,51 +399,79 @@ def ingest_month(
     reports_dir: Path,
     *,
     force: bool = False,
+    today: date | None = None,
+    max_lag_months: int = MAX_PUBLICATION_LAG_MONTHS,
     opener: Opener = _default_opener,
     sleep: Sleeper = time.sleep,
 ) -> Path:
     """Store one month's file untouched and write its provenance report.
 
     Skips the download when HEAD shows the same ETag and Content-Length as the
-    existing report (unless ``force``). Returns the raw file path. Raises
-    ``MonthNotPublishedError`` on 404 (nothing is written).
+    existing report *and* the local file still has the recorded md5 (unless
+    ``force``). Returns the raw file path. Raises ``MonthNotPublishedError``
+    (nothing is written) or ``SourceAccessError``; on any failure the previous
+    snapshot and report are left untouched.
     """
     if not MONTH_RE.match(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
     url = schema.trip_url_template.format(service=service, month=month)
     out_path = data_dir / "raw" / service / f"{month}.parquet"
+    quarantine = data_dir / "quarantine" / service / f"{month}.parquet"
     report_path = reports_dir / "ingest" / f"{service}-{month}.json"
     previous = _read_report(report_path)
 
-    remote: RemoteInfo = _with_retries(
-        lambda: head(url, opener=opener), what=f"HEAD {url}", sleep=sleep
+    remote = _head_month(
+        url,
+        month,
+        schema,
+        ingested_at=None if previous is None else str(previous.get("ingested_at")),
+        today=today or date.today(),
+        max_lag_months=max_lag_months,
+        opener=opener,
+        sleep=sleep,
     )
     if (
         previous is not None
         and not force
-        and out_path.exists()
         and remote.etag is not None
         and remote.etag == previous.get("etag")
         and remote.content_length == previous.get("bytes")
     ):
-        log.info(
-            "%s %s unchanged at source (etag=%s); skipping download",
+        problem = _local_problem(out_path, previous.get("source_md5"))
+        if problem is None:
+            log.info(
+                "%s %s unchanged at source (etag=%s) and local md5 verified; "
+                "skipping download",
+                service,
+                month,
+                remote.etag,
+            )
+            return out_path
+        log.warning(
+            "%s %s unchanged at source but local snapshot is unusable (%s); "
+            "downloading it again",
             service,
             month,
-            remote.etag,
+            problem,
         )
-        return out_path
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("downloading %s", url)
-    source_md5, size = _with_retries(
-        lambda: download(url, out_path, opener=opener), what=f"GET {url}", sleep=sleep
+    log.info("downloading %s to %s", url, quarantine)
+    source_md5, size = _download_to_quarantine(
+        url, quarantine, opener=opener, sleep=sleep
     )
     try:
-        info = check_schema(pq.read_schema(out_path), schema)
-        rows = pq.read_metadata(out_path).num_rows
-    except BaseException:
-        out_path.unlink(missing_ok=True)
+        info = check_schema(pq.read_schema(quarantine), schema)
+        rows = pq.read_metadata(quarantine).num_rows
+    except (SchemaDriftError, pa.ArrowException) as e:
+        log.error(
+            "%s %s: download REJECTED (%s); kept at %s for inspection, accepted "
+            "snapshot %s left untouched",
+            service,
+            month,
+            e,
+            quarantine,
+            out_path if out_path.exists() else "(none)",
+        )
         raise
 
     report: dict[str, Any] = {
@@ -418,6 +497,10 @@ def ingest_month(
             previous["source_md5"],
             source_md5,
         )
+    # File first, then report. A crash between the two leaves a file whose md5
+    # disagrees with its report, which the next run detects and re-fetches.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    quarantine.replace(out_path)
     _write_report(report_path, report)
     log.info(
         "ingested %s %s: rows=%d bytes=%d md5=%s missing_optional=%s",
@@ -439,21 +522,33 @@ def ingest_zones(
     opener: Opener = _default_opener,
     sleep: Sleeper = time.sleep,
 ) -> Path:
-    """Fetch the TLC zone lookup CSV byte-for-byte and check its header."""
+    """Fetch the TLC zone lookup CSV byte-for-byte and check its header.
+
+    Same quarantine rule as months: the previous CSV is replaced only by one
+    that parses and has the expected header.
+    """
     out_path = data_dir / "reference" / "taxi_zone_lookup.csv"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    md5, size = _with_retries(
-        lambda: download(schema.zone_lookup_url, out_path, opener=opener),
-        what=f"GET {schema.zone_lookup_url}",
-        sleep=sleep,
+    quarantine = data_dir / "quarantine" / "reference" / "taxi_zone_lookup.csv"
+    md5, size = _download_to_quarantine(
+        schema.zone_lookup_url, quarantine, opener=opener, sleep=sleep
     )
-    table = pcsv.read_csv(out_path)
     expected = list(schema.zone_lookup_columns)
-    if table.column_names != expected:
-        out_path.unlink()
-        raise SchemaDriftError(
-            f"zone lookup columns {table.column_names} != expected {expected}"
+    try:
+        table = pcsv.read_csv(quarantine)
+        if table.column_names != expected:
+            raise SchemaDriftError(
+                f"zone lookup columns {table.column_names} != expected {expected}"
+            )
+    except (SchemaDriftError, pa.ArrowException) as e:
+        log.error(
+            "zone lookup REJECTED (%s); kept at %s for inspection, %s left untouched",
+            e,
+            quarantine,
+            out_path if out_path.exists() else "(none)",
         )
+        raise
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    quarantine.replace(out_path)
     _write_report(
         reports_dir / "ingest" / "zones.json",
         {
@@ -506,6 +601,7 @@ def _month_arg(value: str) -> str:
 def main(
     argv: Sequence[str] | None = None,
     *,
+    today: date | None = None,
     opener: Opener = _default_opener,
     sleep: Sleeper = time.sleep,
 ) -> int:
@@ -519,6 +615,12 @@ def main(
     parser.add_argument("--service", default="yellow")
     parser.add_argument(
         "--force", action="store_true", help="re-download even if unchanged"
+    )
+    parser.add_argument(
+        "--max-lag-months",
+        type=int,
+        default=MAX_PUBLICATION_LAG_MONTHS,
+        help="a missing month older than this is an error, not 'not published'",
     )
     parser.add_argument("--schema", type=Path, default=Path("configs/schema_raw.yaml"))
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -537,6 +639,7 @@ def main(
             schema, args.data_dir, args.reports_dir, opener=opener, sleep=sleep
         )
         return 0
+    access_failures = 0
     for month in args.month:
         try:
             ingest_month(
@@ -546,9 +649,14 @@ def main(
                 args.data_dir,
                 args.reports_dir,
                 force=args.force,
+                today=today,
+                max_lag_months=args.max_lag_months,
                 opener=opener,
                 sleep=sleep,
             )
         except MonthNotPublishedError as e:
             log.info("month %s not published yet (%s); nothing to do", month, e)
-    return 0
+        except SourceAccessError as e:
+            log.error("month %s: source access failure: %s", month, e)
+            access_failures += 1
+    return 1 if access_failures else 0

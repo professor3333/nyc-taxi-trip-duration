@@ -34,8 +34,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tripduration.ingest import MONTH_RE, is_published, load_schema
+from tripduration.ingest import is_published
 from tripduration.prepare import next_month
+from tripduration.raw_schema import MONTH_RE, load_schema
 
 BRANCH_PREFIX = "retrain/"
 DATA_REJECTED = "data-rejected"

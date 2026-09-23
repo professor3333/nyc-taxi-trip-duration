@@ -31,3 +31,6 @@ mlartifacts/
 
 # fetch_champion.py output, consumed by the Docker build
 build/
+
+# Downloads awaiting (or refused by) the ingest checks; see ingest.py
+data/quarantine/

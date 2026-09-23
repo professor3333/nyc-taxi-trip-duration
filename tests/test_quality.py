@@ -17,8 +17,8 @@ import pytest
 
 from tripduration import quality, validate
 from tripduration.config import Params
-from tripduration.ingest import RawSchema, SchemaDriftError
 from tripduration.quality import QualityError
+from tripduration.raw_schema import RawSchema, SchemaDriftError
 
 ROOT = Path(__file__).resolve().parents[1]
 MONTH = "2024-11"

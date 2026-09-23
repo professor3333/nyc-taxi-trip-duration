@@ -20,14 +20,14 @@ stages:
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
       size: 3396
-    - path: src/tripduration/ingest.py
+    - path: src/tripduration/raw_schema.py
       hash: md5
-      md5: 4567ec7675da8cc9ddfa0cafca36e8a4
-      size: 18489
+      md5: 6f03db813df0f2839297ecf51b7f6459
+      size: 4401
     - path: src/tripduration/validate.py
       hash: md5
-      md5: 08a4e15f1b97f4565ac5b34a44a2e95f
-      size: 9020
+      md5: dfde3282005e1637c089931e89573a5f
+      size: 9024
     - path: uv.lock
       hash: md5
       md5: 172a80f2d233d5284a269833ee714738
@@ -93,22 +93,22 @@ stages:
       hash: md5
       md5: 9ae2d0082ff3f53e4b445abd4dc5466e
       size: 4430
-    - path: src/tripduration/ingest.py
-      hash: md5
-      md5: 4567ec7675da8cc9ddfa0cafca36e8a4
-      size: 18489
     - path: src/tripduration/prepare.py
       hash: md5
       md5: 202ef32b000d5e8754ae95887865dd96
       size: 5916
+    - path: src/tripduration/raw_schema.py
+      hash: md5
+      md5: 6f03db813df0f2839297ecf51b7f6459
+      size: 4401
     - path: src/tripduration/schema.py
       hash: md5
       md5: 566549c63bf8888eb041b312f33836eb
       size: 1122
     - path: src/tripduration/validate.py
       hash: md5
-      md5: 08a4e15f1b97f4565ac5b34a44a2e95f
-      size: 9020
+      md5: dfde3282005e1637c089931e89573a5f
+      size: 9024
     - path: uv.lock
       hash: md5
       md5: 172a80f2d233d5284a269833ee714738
@@ -313,18 +313,18 @@ stages:
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
       size: 3396
-    - path: src/tripduration/ingest.py
-      hash: md5
-      md5: 4567ec7675da8cc9ddfa0cafca36e8a4
-      size: 18489
     - path: src/tripduration/quality.py
       hash: md5
-      md5: 6a310662dde79b74607e1f805d09864d
-      size: 10854
+      md5: ec305258b79aeb6dd16b9a6661f90012
+      size: 10858
+    - path: src/tripduration/raw_schema.py
+      hash: md5
+      md5: 6f03db813df0f2839297ecf51b7f6459
+      size: 4401
     - path: src/tripduration/validate.py
       hash: md5
-      md5: 08a4e15f1b97f4565ac5b34a44a2e95f
-      size: 9020
+      md5: dfde3282005e1637c089931e89573a5f
+      size: 9024
     - path: uv.lock
       hash: md5
       md5: 172a80f2d233d5284a269833ee714738

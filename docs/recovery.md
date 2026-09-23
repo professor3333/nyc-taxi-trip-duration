@@ -230,3 +230,11 @@ path → 403. Ingest treated only 404 as "not published", so the weekly check
 would have failed *every Monday* until a month appeared. Both codes are now
 "not published", neither is retried, and there is no authentication on these
 URLs so a 403 cannot mean "not allowed".
+
+**Correction (2026-09-23).** "A 403 cannot mean not allowed" was too strong: a
+revoked origin, a blocked egress or a WAF rule answers 403 too, and reading
+every one as "not published" would keep the weekly check green forever. A
+403/404 is now "not published" only when the month has never been ingested, is
+within 4 months of today (the worst measured lag is 3: 2026-06 appeared on
+2026-09-17), and a HEAD of the zone lookup on the same distribution succeeds.
+Anything else is a `SourceAccessError`: exit 1, and the plan job fails red.
