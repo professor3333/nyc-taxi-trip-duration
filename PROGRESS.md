@@ -147,3 +147,12 @@ Tick a line only when its proof command passes, not when the code is written.
 - `retrain.yml` now finds the `pull_request` `ci` run on the candidate PR's head, comments its state, and **fails** if GitHub created none (PR #24's head had zero check runs, unreported).
 - `make candidate-ci BRANCH=retrain/<M>` (`scripts/candidate_ci.sh`): approve the held run, wait, assert required checks succeeded on the head **and** the PR is CLEAN. ADR-0010 (b) chooses this over a GitHub App token.
 - Proven on PR #46 (2025-04, run 35816149653, gate PASS 3.5062 vs 3.6649): BLOCKED + exit 2 before approval → `ci` success + CLEAN + exit 0 after → merged `47f3643`. Serving still v3.
+
+## Deploy scripts reproduce the deployment — 2026-09-23
+
+- `deploy/aws/env.sh` defaults are the measured working values: **3008 MB / 60 s** (were 1024 / 30, which never finished init).
+- `lambda.sh` reconciles an existing function with env.sh: memory, timeout, role, environment, image, URL auth type and URL permissions. Each difference is logged and corrected; a rerun with no drift changes nothing. Switching auth mode revokes the other mode's grants. SNS subscribes once instead of re-mailing every run.
+- URL grants are now `InvokeFunctionUrl` **and** `InvokeFunction` (via URL), required since Oct 2025 — the probable cause of ADR-0008's "only root can call the URL".
+- `teardown.sh` deletes all 5 alarms (it deleted 2).
+- Proof (offline): `uv run pytest tests/test_lambda_sh.py` — 7 tests against a stateful fake `aws`; all 7 fail on the previous script.
+- **Not yet run live:** `make lambda-drill IMAGE=…` (scratch function, deleted afterwards) and the reconcile run on the serving function — both add a resource-policy grant and need the owner's go-ahead.

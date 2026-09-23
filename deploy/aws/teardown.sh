@@ -8,7 +8,7 @@ read -r -p "Tear down ALL ${PROJECT} resources in ${ACCOUNT_ID}/${AWS_REGION}, i
 
 aws lambda delete-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || true
 aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null && log "deleted lambda" || true
-for NAME in ErrorCount FallbackCount; do
+for NAME in ErrorCount FallbackCount LatencyP95 InvalidRequests PredictionMedianHigh; do
   aws cloudwatch delete-alarms --alarm-names "${PROJECT}-${NAME}" 2>/dev/null || true
 done
 aws logs delete-log-group --log-group-name "/aws/lambda/${LAMBDA_FUNCTION_NAME}" 2>/dev/null && log "deleted log group" || true

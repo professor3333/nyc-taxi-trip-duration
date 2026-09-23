@@ -37,7 +37,7 @@ git add models/champion.json docs/promotions.md && git commit -m "Roll back cham
 2. `degraded` + `load_error` → the image is bad: the artefacts in the DVC remote at the champion sha do not load. Roll back.
 3. `model_version` ≠ champion → the last deploy did not finish; re-run `deploy.yml`.
 4. 5xx → Logs Insights `filter level = "ERROR"` for the traceback; every line has `request_id`.
-5. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` in `deploy/aws/env.sh`, re-run `lambda.sh`, record in ADR-0008.
+5. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` (and/or `LAMBDA_TIMEOUT_S`) in `deploy/aws/env.sh`, re-run `deploy/aws/lambda.sh <live image uri>` — it applies configuration to the existing function and logs each change — then record in ADR-0008. Live image: `aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text`.
 
 ## Retrain candidates: accept data, promote (or not) the model
 

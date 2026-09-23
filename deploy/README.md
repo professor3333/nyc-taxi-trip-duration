@@ -37,8 +37,16 @@ After `iam.sh` / `lambda.sh`, GitHub repository secrets needed by the workflows:
 `AWS_ROLE_ARN`, `AWS_REGION`, `S3_BUCKET`, `ECR_REPOSITORY`,
 `LAMBDA_FUNCTION_NAME`, `FUNCTION_URL`. Nothing else.
 
-**State on 2026-09-22:** no AWS account is configured on the development
-machine; none of these scripts has been run. `docs/cost.md` records the
-system as "off".
+**`lambda.sh` is declarative in intent.** env.sh is the desired state; each
+run compares memory, timeout, role, environment, image, URL auth type and URL
+permissions with the deployed function and corrects any difference, logging
+it (`config drift: timeout 30 -> 60`). To change a setting, change env.sh (or
+export the variable) and re-run with the live image URI; a rerun with no
+drift changes nothing. Needs `jq`. Offline proof: `uv run pytest
+tests/test_lambda_sh.py`. Live proof against a scratch function that is
+deleted afterwards: `make lambda-drill IMAGE=<ecr uri@sha256:…>`.
+
+**State on 2026-09-23:** live in account 560512681455, us-east-1
+(ADR-0008). `docs/cost.md` holds the ledger.
 
 ## mlflow/ — the tracking-server image used by compose.yaml
