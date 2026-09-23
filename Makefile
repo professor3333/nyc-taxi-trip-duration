@@ -1,7 +1,14 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
+
+lint-infra:   ## shellcheck every script, actionlint every workflow (both also run in CI)
+	shellcheck deploy/aws/*.sh scripts/*.sh
+	actionlint
+
+audit:        ## Dependency vulnerabilities from uv.lock: runtime strict, other groups vs security/pip-audit-ignore.txt
+	scripts/audit.sh
 
 lint:         ## Static checks: ruff lint, ruff format check, mypy on src/
 	uv run ruff check .

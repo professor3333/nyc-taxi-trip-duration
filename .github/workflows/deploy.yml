@@ -3,8 +3,11 @@ name: deploy
 # Deploys when the champion pointer changes on main (promotion or rollback),
 # or by hand. Fetches the champion's artefacts from the DVC remote (S3) at the
 # champion's commit, builds the image, pushes to ECR, updates Lambda, and runs
-# deploy_check against the Function URL. A failed check fails the workflow;
-# rollback is `make rollback REASON=...` + push (docs/runbook.md).
+# deploy_check against the Function URL. The release image must pass a
+# vulnerability scan before Lambda is touched. If any check after the update
+# fails, the previous image is restored automatically, verified, and the run
+# still fails; a model rollback is `make rollback REASON=...` + push
+# (docs/runbook.md).
 
 on:
   push:
@@ -14,6 +17,11 @@ on:
       - models/champion_meta.json   # the champion's feature list; also baked in
       - models/champion_fixture.csv # this version's predictions, checked after deploy
   workflow_dispatch:
+    inputs:
+      inject_failure:
+        description: "Drill: fail after the checks pass, to prove the automatic restore"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy
@@ -98,6 +106,16 @@ jobs:
             echo "- model: \`${{ steps.champ.outputs.version }}\` trained at \`${{ steps.champ.outputs.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Same gate as CI, on the exact bytes that would run: CRITICAL/HIGH with
+      # a fix fails the release before Lambda changes. (ECR scan-on-push also
+      # runs, but only reports.)
+      - name: Vulnerability scan of the release image (trivy)
+        run: |
+          docker pull -q "$IMAGE_URI" >/dev/null
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --quiet --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$IMAGE_URI"
+
       - name: Update Lambda (by digest) and wait
         run: |
           # By digest, not by tag: what was tested is exactly what runs, and
@@ -108,6 +126,10 @@ jobs:
           # the cold start, measured and proven by deploy_check --cold. The
           # same digest again recycles nothing, so there is nothing to measure.
           if [ "$PREV" != "$IMAGE_URI" ]; then echo "COLD=true" >> "$GITHUB_ENV"; fi
+          echo "PREV_IMAGE=$PREV" >> "$GITHUB_ENV"
+          # From here a failure restores PREV (last step). Set before the
+          # update: an update that fails half way must be restored too.
+          echo "UPDATING=true" >> "$GITHUB_ENV"
           aws lambda update-function-code \
             --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
             --image-uri "$IMAGE_URI" >/dev/null
@@ -157,3 +179,30 @@ jobs:
             --expect-fixture models/champion_fixture.csv \
             --models-dir build/champion/models --reference-dir build/champion/reference \
             --malformed
+
+      - name: Drill - injected failure
+        if: inputs.inject_failure
+        run: |
+          echo "::error::injected failure (workflow_dispatch inject_failure=true): the restore step must now put $PREV_IMAGE back"
+          exit 1
+
+      # Automatic recovery: the image that was serving before this run goes
+      # back, and must be the one running and healthy afterwards. The run
+      # stays failed - a restored deploy is still a failed deploy.
+      - name: Restore the previous image
+        if: failure() && env.UPDATING == 'true' && env.PREV_IMAGE != '' && env.PREV_IMAGE != env.IMAGE_URI
+        run: |
+          FN="${{ secrets.LAMBDA_FUNCTION_NAME }}"
+          echo "::warning::deploy failed after the update; restoring $PREV_IMAGE"
+          aws lambda wait function-updated --function-name "$FN"
+          aws lambda update-function-code --function-name "$FN" --image-uri "$PREV_IMAGE" >/dev/null
+          aws lambda wait function-updated --function-name "$FN"
+          RUNNING=$(aws lambda get-function --function-name "$FN" --query Code.ImageUri --output text)
+          test "$RUNNING" = "$PREV_IMAGE" || { echo "::error::restore failed: running $RUNNING"; exit 1; }
+          # Health of what is now serving; its version is whatever PREV was.
+          uv run python scripts/deploy_check.py --invoke "$FN" --malformed
+          {
+            echo "### Deploy failed; previous image restored"
+            echo "- failed: \`$IMAGE_URI\`"
+            echo "- restored and verified: \`$PREV_IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

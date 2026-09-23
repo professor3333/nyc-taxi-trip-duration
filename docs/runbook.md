@@ -23,6 +23,12 @@ uv run python scripts/deploy_check.py --url http://localhost:8082 --expect-versi
 4. First image + function: run `deploy.yml` by `workflow_dispatch` up to the push step, then `deploy/aws/lambda.sh <image uri>`; set `FUNCTION_URL`; re-run `deploy.yml`.
 5. Verify: `uv run python scripts/deploy_check.py --url $FUNCTION_URL --expect-version v<n> --malformed --cold`.
 
+## Failed deploy (automatic restore)
+
+If any check after the Lambda update fails, `deploy.yml` puts back the image that was serving before (`PREV_IMAGE`). It verifies that image is the one running and healthy (`deploy_check --invoke --malformed`), writes both digests to the run summary, and still fails the run. Afterwards the service runs the previous *image*, but `models/champion.json` still names the new champion, so `monitor.yml` reports the version mismatch until you either fix and redeploy or run a model rollback (below). Drill: `gh workflow run deploy.yml -f inject_failure=true`. It fails after all checks pass, so the restore can be observed.
+
+A vulnerable release image never reaches Lambda: the Trivy gate (CRITICAL/HIGH with a fix) runs before the update.
+
 ## Rollback
 
 ```

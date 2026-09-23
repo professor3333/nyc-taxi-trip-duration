@@ -12,7 +12,6 @@
 source "$(dirname "$0")/env.sh"
 IMAGE_URI="${1:?image uri required}"
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
-LOG_GROUP="/aws/lambda/${LAMBDA_FUNCTION_NAME}"
 FN=(--function-name "$LAMBDA_FUNCTION_NAME")
 WANT_ENV=$(jq -cS . <<<"$LAMBDA_ENV_JSON")
 

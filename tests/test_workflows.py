@@ -40,3 +40,65 @@ def test_retrain_preserves_its_tracking_run() -> None:
     commit = wf.index("git add data/raw/yellow/ dvc.lock metrics/ reports/")
     assert repro < export < commit  # exported after training, before the commit
     assert "actions/upload-artifact@v4" in wf and "ci-mlflow.db" in wf
+
+
+def _wf(name: str) -> dict:  # type: ignore[type-arg]
+    data: dict = yaml.safe_load(
+        next(p for p in WORKFLOWS if p.name == name).read_text()
+    )  # type: ignore[type-arg]
+    return data
+
+
+def _steps(job: dict) -> list[str]:  # type: ignore[type-arg]
+    return [str(s.get("name") or s.get("uses")) for s in job["steps"]]
+
+
+def test_retrain_check_only_cannot_write_anything() -> None:
+    """True check-only: the plan job has no write permission and no cloud
+    credentials, and the only job that ingests, trains or pushes runs solely
+    when the plan says should_train (which --check-only never does:
+    test_retrain_plan.py::test_cli_reads_gh_and_git_output)."""
+    wf = _wf("retrain.yml")
+    plan = wf["jobs"]["plan"]
+    assert plan["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert not any("configure-aws-credentials" in s for s in _steps(plan))
+    assert '[ "$CHECK_ONLY" = "true" ] && ARGS+=(--check-only)' in str(plan["steps"])
+    others = {n: j for n, j in wf["jobs"].items() if n != "plan"}
+    assert set(others) == {"train"}
+    assert others["train"]["if"] == "needs.plan.outputs.should_train == 'true'"
+
+
+def test_ci_runs_every_gate() -> None:
+    steps = " | ".join(_steps(_wf("ci.yml")["jobs"]["ci"]))
+    for gate in (
+        "shellcheck",
+        "actionlint",
+        "Dependency vulnerability audit",
+        "Image vulnerability scan",
+        "Container smoke",
+        "Cold-start check",
+    ):
+        assert gate in steps, gate
+
+
+def test_deploy_scans_before_lambda_changes_and_restores_on_failure() -> None:
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    scan = names.index("Vulnerability scan of the release image (trivy)")
+    update = names.index("Update Lambda (by digest) and wait")
+    assert scan < update  # a vulnerable image never reaches Lambda
+    restore = job["steps"][names.index("Restore the previous image")]
+    assert names.index("Restore the previous image") == len(names) - 1
+    assert restore["if"] == (
+        "failure() && env.UPDATING == 'true' && env.PREV_IMAGE != '' "
+        "&& env.PREV_IMAGE != env.IMAGE_URI"
+    )
+    run = job["steps"][update]["run"]
+    # PREV is recorded, and UPDATING set, before the update call itself
+    assert (
+        run.index("PREV_IMAGE=")
+        < run.index("UPDATING=true")
+        < run.index("update-function-code")
+    )
+    assert '--image-uri "$PREV_IMAGE"' in restore["run"]
+    assert 'test "$RUNNING" = "$PREV_IMAGE"' in restore["run"]

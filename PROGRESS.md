@@ -252,3 +252,24 @@ Tick a line only when its proof command passes, not when the code is written.
 - **Ledger re-measured:** DVC remote 2.74 GB (the old figure was 793 MB); ECR 7 images ≈ 1.23 GB; logs 0.32 MB. Estimate ≈ $5.24 at list price, ≈ $1.20 after always-free allowances, $0 charged on the Free plan. Monitoring probe traffic (~7k invokes/month) and retention (DVC growth, ECR 5 images, 90-day artifacts) are now included.
 - **Corrected claims:** the budget only notifies, and reserved concurrency is **not set** (account limit 10) and would only limit the rate anyway. What actually bounds spend is IAM auth on the URL and the Free plan's credits.
 - The review's teardown bug (hardcoded alarm list) was already fixed in #66, which deletes by prefix; `tests/test_teardown.py` covers it.
+
+## Integration coverage: what the suite now exercises — 2026-09-23
+
+The review listed gaps; checked against the tree first. Already covered by merged work:
+- promotion failures after an alias update (#58: failure injection at every step);
+- prediction-time fallback and startup metadata corruption (ADR-0012, `test_serving_failures.py`);
+- plan-level check-only and repeated retrains (`test_retrain_plan.py`);
+- teardown alarm completeness (#66).
+
+New:
+- **Actual DVC graph** (`tests/test_dvc_repro.py`, CI step): the committed `dvc.yaml` runs in a fresh uv environment. Five stages in order; a no-change rerun runs nothing; a model param change reruns only train and evaluate; a quality failure stops at `quality`, with the model untouched. Found: a clean checkout needs `make setup` (the train group) before `dvc repro`, because `uv run --locked` does not install mlflow.
+- **Workflow-level check-only**: the plan job has read-only permissions and no AWS credentials, and only `should_train` starts the one job that writes.
+- **Release artefacts** (`test_release_contract.py`): the committed record, fixture sha, 80-row grid, and feature list against the code.
+- **Deploy**: a Trivy gate on the release image before Lambda changes, and an automatic restore of the previous image on any post-update failure (the drill input is `inject_failure`).
+- **API edges** (`test_api_edges.py`, 19 cases): window edges to the microsecond, offsets crossing them, the DST gap and overlap, the production `max_batch` (100) in order and equal to singles, 101 → 422, and 64 concurrent requests from 16 threads with no cross-talk.
+- **Infra scripts** (`test_infra_scripts.py`): s3, ecr and budget, fresh, rerun and drift. Found and fixed two real bugs: `ecr.sh` set scan-on-push only at creation, and `budget.sh` skipped an existing budget, so a changed limit or email never applied.
+- **Backup/restore in CI**: real Compose Postgres + MLflow, seeded versions and aliases, backup, restore into a scratch project, and a negative control that must fail *on the alias mismatch*. Locally a restore that OOM'd also exited 1, which would have passed a weaker check.
+- **CI gates**:
+  - `shellcheck` on every script and `actionlint` on every workflow (both clean after four small fixes);
+  - `pip-audit`: the runtime set is strict (26 packages, clean); all groups check against `security/pip-audit-ignore.txt` (1 accepted: diskcache via dvc, no fix, cache-dir write needed);
+  - Trivy on the image, which is clean today; its negative control, `python:3.9.0-slim`, gives 103 findings and exit 1.

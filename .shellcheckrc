@@ -1,0 +1,3 @@
+# Follow `source "$(dirname "$0")/env.sh"` relative to each script.
+external-sources=true
+source-path=SCRIPTDIR

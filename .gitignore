@@ -40,3 +40,7 @@ models/.promotion/
 
 # registry_backup.py output (offsite copy: S3 backups/registry/)
 backups/
+
+# CI registry drill output
+drill/
+tampered/
