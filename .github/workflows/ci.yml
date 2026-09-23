@@ -80,3 +80,18 @@ jobs:
           uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --models-dir build/ci-models --reference-dir tests/fixtures
           docker logs api | tail -5
           docker rm -f api
+
+      # --cold must prove the first request met a fresh process, and must
+      # refuse a warm one. Readiness is read from the log, never over HTTP,
+      # so no request reaches the new process before the measured one.
+      - name: Cold-start check (positive and negative)
+        run: |
+          docker run -d --name cold -p 8080:8080 tripduration:ci
+          for i in $(seq 1 60); do docker logs cold 2>&1 | grep -q "Application startup complete" && break; sleep 1; done
+          uv run python scripts/deploy_check.py --url http://localhost:8080 --cold --latency-samples 5 --evidence cold.json
+          jq -e '.cold.body.requests_before == 0' cold.json
+          if uv run python scripts/deploy_check.py --url http://localhost:8080 --cold > warm.txt; then
+            echo "::error::--cold passed against a warm process"; cat warm.txt; exit 1
+          fi
+          grep -q "FAIL  cold: fresh process" warm.txt
+          docker rm -f cold

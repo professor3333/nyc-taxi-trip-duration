@@ -70,13 +70,27 @@ Anything registered after that backup is re-registered from its commit (`docs/pr
 
 Never delete `models/.promotion/` by hand while a journal is in it: it holds the only copy of the pre-operation files.
 
+## Alert delivery (after `monitoring.sh`, and whenever the email changes)
+
+1. Confirm the subscription: open the "AWS Notification - Subscription Confirmation" mail and click the link. Until then, `monitoring.sh` warns `has not confirmed the subscription` and every alarm delivers nothing.
+2. `uv run python scripts/alarm_drill.py --evidence drill.json`: a real ERROR line → `ErrorCount` ALARM → email → OK → email (~10–15 min). Two emails must arrive, and the script must print `drill passed`.
+3. `--forced` repeats only the delivery leg (set-alarm-state) in about a minute.
+
+## Stale data or model (`freshness` issue)
+
+`scripts/freshness.py` names the stale signal:
+- **data**: the newest month on `main` is too old. Check the last `retrain.yml` runs. A plan that found nothing to do is fine only if TLC has not published; `retrain.yml -f check_only=true` says which. A red run: read its log. A backlog: dispatch `retrain.yml -f month=YYYY-MM` for each missing month, oldest first. The weekly schedule advances one month per run.
+- **model**: register and promote a newer candidate (Retrain candidates, below).
+- **retrain**: no `train` job has succeeded in 21 days. Read the last runs with `gh run view --log`.
+
 ## Service down or degraded (`monitor.yml` issue, CloudWatch alarm)
 
 1. `curl $FUNCTION_URL/health` — `status`, `model_version`, `load_error`.
 2. `degraded` + `load_error` → the image is bad: the artefacts in the DVC remote at the champion sha do not load. Roll back.
 3. `model_version` ≠ champion → the last deploy did not finish; re-run `deploy.yml`.
 4. 5xx → Logs Insights `filter level = "ERROR"` for the traceback; every line has `request_id`.
-5. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` (and/or `LAMBDA_TIMEOUT_S`) in `deploy/aws/env.sh`, re-run `deploy/aws/lambda.sh <live image uri>` — it applies configuration to the existing function and logs each change — then record in ADR-0008. Live image: `aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text`.
+5. `Timeouts` / `InitFailures` / `PlatformErrors` alarms: the app may never have run, so its own log has nothing. Use Logs Insights `filter @message like /Task timed out|INIT_REPORT|Runtime exited/`. Measure a cold start by hand with `uv run python scripts/deploy_check.py --url $URL --sigv4 --cold --function nyc-taxi-trip-duration --force-new-environment --evidence cold.json` (owner credentials: it changes an environment variable and restores it).
+6. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` (and/or `LAMBDA_TIMEOUT_S`) in `deploy/aws/env.sh`, re-run `deploy/aws/lambda.sh <live image uri>` — it applies configuration to the existing function and logs each change — then record in ADR-0008. Live image: `aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text`.
 
 ## Retrain candidates: accept data, promote (or not) the model
 

@@ -17,13 +17,15 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar, TypeVar
 
 import anyio
 import anyio.to_thread
+import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -72,6 +74,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.predictor = predictor
         app.state.settings = settings
         app.state.started_at = time.monotonic()
+        # Process identity: a request that sees requests_seen == 0 is the first
+        # this execution environment ever served, i.e. it paid the cold start.
+        app.state.instance_id = uuid.uuid4().hex[:12]
+        app.state.process_started_at = datetime.now(UTC).isoformat(timespec="seconds")
+        app.state.requests_seen = 0
         log.info(
             "startup",
             extra={
@@ -236,6 +243,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             [i.departure_time for i in body.items],
         )
         _served(request, result)
+        # Batch requests feed the prediction distribution as a summary, kept
+        # apart from single predictions so one metric never mixes the two.
+        vals = np.asarray(result.values, dtype=float)
+        request.state.batch_size = int(vals.size)
+        request.state.batch_prediction_p50 = round(float(np.median(vals)), 2)
+        request.state.batch_prediction_max = round(float(vals.max()), 2)
         return BatchPredictResponse(
             predictions=[round(float(x), 2) for x in result.values],
             model_version=result.version,
@@ -340,6 +353,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             train_months=list(p.meta.get("train_months", [])),
             feature_count=len(p.meta.get("feature_columns", [])),
             loaded_at=p.loaded_at,
+            instance_id=request.app.state.instance_id,
+            process_started_at=request.app.state.process_started_at,
+            requests_before=request.state.process_request_index,
         )
 
     # Kept so a rollout never has a window where probes 404. `/health` is the

@@ -27,6 +27,10 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         predictor = getattr(request.app.state, "predictor", None)
         model_version_var.set(predictor.model_version if predictor else "-")
         request.state.request_id = rid
+        state = request.app.state
+        index = getattr(state, "requests_seen", 0)
+        state.requests_seen = index + 1
+        request.state.process_request_index = index
         t0 = time.perf_counter()
         try:
             response = await call_next(request)
@@ -56,6 +60,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "model_kind": getattr(request.state, "model_kind", None),
                 "served_version": getattr(request.state, "served_version", None),
                 "prediction_min": getattr(request.state, "prediction", None),
+                "batch_size": getattr(request.state, "batch_size", None),
+                "batch_prediction_p50_min": getattr(
+                    request.state, "batch_prediction_p50", None
+                ),
+                "batch_prediction_max_min": getattr(
+                    request.state, "batch_prediction_max", None
+                ),
+                "instance_id": getattr(state, "instance_id", None),
+                "process_request_index": index,
             },
         )
         return response

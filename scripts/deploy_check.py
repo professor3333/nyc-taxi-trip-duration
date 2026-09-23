@@ -7,7 +7,19 @@
         --expect-fixture models/champion_fixture.csv   # predictions restored?
     uv run python scripts/deploy_check.py --url $URL --expect-version v1
     uv run python scripts/deploy_check.py --url $URL --malformed     # exit criterion 5
-    uv run python scripts/deploy_check.py --url $URL --cold --n 5    # cold-start p95
+    uv run python scripts/deploy_check.py --invoke fn --cold          # after a deploy
+    uv run python scripts/deploy_check.py --url $URL --sigv4 --cold \
+        --function fn --force-new-environment --evidence reports/coldstart/x.json
+    uv run python scripts/deploy_check.py --url $URL --sigv4 --latency-samples 10 \
+        --publish-metrics monitor                          # end-to-end latency
+
+--cold measures the FIRST request of the run and fails unless it is provably
+cold: the app reports it was the first request its process served
+(``/version`` ``requests_before == 0``) and Lambda's REPORT line for that
+request carries an ``Init Duration`` (from the invoke log tail, or looked up
+in CloudWatch Logs by request id for a URL call). It then enforces
+--cold-max-ms end to end. --force-new-environment changes an environment
+variable first, so no warm environment can answer, and restores it after.
 
 Default checks: /health is ok (or --allow-degraded), /ready is 200, the
 fixture prediction matches --expect-duration (or the offline value computed
@@ -18,8 +30,10 @@ any failure; prints a transcript.
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
+import math
 import statistics
 import sys
 import time
@@ -102,7 +116,15 @@ def invoke(
     """
     import boto3
 
-    event = {
+    event = _event(path, method, body, ctype)
+    client = boto3.client("lambda")
+    t0 = time.perf_counter()
+    resp = client.invoke(FunctionName=function, Payload=json.dumps(event).encode())
+    return _decode(resp, (time.perf_counter() - t0) * 1000)
+
+
+def _event(path: str, method: str, body: bytes | None, ctype: str) -> dict[str, Any]:
+    return {
         "version": "2.0",
         "rawPath": path,
         "rawQueryString": "",
@@ -113,11 +135,10 @@ def invoke(
         "body": body.decode("utf-8", errors="replace") if body else None,
         "isBase64Encoded": False,
     }
-    client = boto3.client("lambda")
-    t0 = time.perf_counter()
-    resp = client.invoke(FunctionName=function, Payload=json.dumps(event).encode())
+
+
+def _decode(resp: dict[str, Any], ms: float) -> tuple[int, dict[str, Any] | str, float]:
     raw = resp["Payload"].read()
-    ms = (time.perf_counter() - t0) * 1000
     if "FunctionError" in resp:
         return 500, raw.decode(errors="replace")[:300], ms
     out = json.loads(raw)
@@ -157,6 +178,166 @@ def call(
         return status, json.loads(raw), ms
     except json.JSONDecodeError:
         return status, raw.decode(errors="replace")[:200], ms
+
+
+# --- cold start and end-to-end latency ---------------------------------------------
+
+
+def parse_report(text: str) -> dict[str, Any] | None:
+    """Lambda's platform REPORT line -> its fields, or None if there is none.
+
+    ``Init Duration`` is present only when this invocation created its
+    execution environment: it is the platform's own proof of a cold start.
+    """
+    for line in text.splitlines():
+        if not line.startswith("REPORT RequestId:"):
+            continue
+        out: dict[str, Any] = {"line": line.strip()}
+        for part in line.split("\t"):
+            key, _, value = part.partition(": ")
+            key = key.strip()
+            if key == "REPORT RequestId":
+                out["request_id"] = value.strip()
+            elif value.endswith(" ms"):
+                out[key.lower().replace(" ", "_") + "_ms"] = float(value[:-3])
+            elif value.endswith(" MB"):
+                out[key.lower().replace(" ", "_") + "_mb"] = int(value[:-3])
+        return out
+    return None
+
+
+def p95(values: list[float]) -> float:
+    """Nearest-rank p95: with few samples, the largest that 95% do not exceed."""
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
+
+
+def recycle_environments(function: str) -> dict[str, str]:
+    """Force every later request onto a new execution environment by changing
+    an environment variable; return the variables to restore afterwards."""
+    import boto3
+
+    lam = boto3.client("lambda")
+    cfg = lam.get_function_configuration(FunctionName=function)
+    original: dict[str, str] = dict(cfg.get("Environment", {}).get("Variables", {}))
+    probe = {**original, "COLD_START_PROBE": str(int(time.time()))}
+    lam.update_function_configuration(
+        FunctionName=function, Environment={"Variables": probe}
+    )
+    lam.get_waiter("function_updated_v2").wait(FunctionName=function)
+    return original
+
+
+def restore_environment(function: str, variables: dict[str, str]) -> None:
+    import boto3
+
+    lam = boto3.client("lambda")
+    lam.update_function_configuration(
+        FunctionName=function, Environment={"Variables": variables}
+    )
+    lam.get_waiter("function_updated_v2").wait(FunctionName=function)
+
+
+def first_request(base: str, sign: bool, function: str | None) -> dict[str, Any]:
+    """Time the run's first request (GET /version) end to end, keeping what
+    identifies it on the platform side."""
+    path = "/version"
+    if function:
+        import boto3
+
+        t0 = time.perf_counter()
+        resp = boto3.client("lambda").invoke(
+            FunctionName=function,
+            Payload=json.dumps(_event(path, "GET", None, "application/json")).encode(),
+            LogType="Tail",
+        )
+        ms = (time.perf_counter() - t0) * 1000
+        tail = base64.b64decode(resp.get("LogResult", "")).decode(errors="replace")
+        status, body, _ = _decode(resp, ms)
+        return {
+            "path": "invoke",
+            "e2e_ms": ms,
+            "status": status,
+            "body": body,
+            "request_id": resp["ResponseMetadata"]["RequestId"],
+            "report": parse_report(tail),
+        }
+    url = f"{base}{path}"
+    headers = {"content-type": "application/json"}
+    if sign:
+        headers = _sign(url, "GET", None, headers)
+    t0 = time.perf_counter()
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw, status, hdrs = r.read(), r.status, dict(r.headers)
+    except urllib.error.HTTPError as e:
+        raw, status, hdrs = e.read(), e.code, dict(e.headers)
+    ms = (time.perf_counter() - t0) * 1000
+    try:
+        body: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        body = raw.decode(errors="replace")[:200]
+    rid = next((v for k, v in hdrs.items() if k.lower() == "x-amzn-requestid"), None)
+    return {
+        "path": "url",
+        "e2e_ms": ms,
+        "status": status,
+        "body": body,
+        "request_id": rid,
+        "report": None,
+        "started_epoch_ms": int(time.time() * 1000 - ms),
+    }
+
+
+def find_report(
+    log_group: str, request_id: str, start_ms: int, wait_s: float = 120
+) -> dict[str, Any] | None:
+    """Look up the REPORT line of one invocation in CloudWatch Logs."""
+    import boto3
+
+    logs = boto3.client("logs")
+    deadline = time.monotonic() + wait_s
+    while True:
+        resp = logs.filter_log_events(
+            logGroupName=log_group,
+            startTime=start_ms - 60_000,
+            filterPattern=f'"REPORT RequestId: {request_id}"',
+        )
+        for ev in resp.get("events", []):
+            rep = parse_report(ev["message"])
+            if rep is not None:
+                return rep
+        if time.monotonic() > deadline:
+            return None
+        time.sleep(5)
+
+
+def publish(probe: str, metrics: dict[str, list[float]], namespace: str) -> str:
+    """PutMetricData, one metric per key, dimension Probe. Returns a status line.
+
+    Missing permission is reported, not fatal: the monitor role gains
+    cloudwatch:PutMetricData with the ADR-0013 migration."""
+    import boto3
+    from botocore.exceptions import ClientError
+
+    data = [
+        {
+            "MetricName": name,
+            "Dimensions": [{"Name": "Probe", "Value": probe}],
+            "Values": values,
+            "Unit": "Milliseconds",
+        }
+        for name, values in metrics.items()
+        if values
+    ]
+    try:
+        boto3.client("cloudwatch").put_metric_data(Namespace=namespace, MetricData=data)
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("AccessDenied", "AccessDeniedException"):
+            return f"::warning::metrics not published ({e.response['Error']['Code']})"
+        raise
+    return f"published {', '.join(f'{k}×{len(v)}' for k, v in metrics.items() if v)}"
 
 
 def _short(resp: Any) -> str:
@@ -232,9 +413,37 @@ def main() -> int:
     ap.add_argument(
         "--cold",
         action="store_true",
-        help="measure request latency p50/p95 (first call = cold start)",
+        help="the run's first request must be provably cold; enforce --cold-max-ms",
     )
-    ap.add_argument("--n", type=int, default=5)
+    ap.add_argument(
+        "--function",
+        help="Lambda function behind --url (log lookup, --force-new-environment)",
+    )
+    ap.add_argument(
+        "--force-new-environment",
+        action="store_true",
+        help="with --cold: change an env var first so no warm environment exists",
+    )
+    # ADR-0008: 3008 MB initialises in ~24 s; 45 s leaves margin under the
+    # 60 s timeout, so a breach is a real regression, not noise.
+    ap.add_argument("--cold-max-ms", type=float, default=45_000)
+    ap.add_argument(
+        "--latency-samples",
+        type=int,
+        default=0,
+        help="warm /predict calls timed end to end (default 5 with --cold)",
+    )
+    ap.add_argument("--warm-p95-max-ms", type=float, default=1_500)
+    ap.add_argument(
+        "--evidence", type=Path, help="write the cold/latency evidence JSON"
+    )
+    ap.add_argument(
+        "--publish-metrics",
+        metavar="PROBE",
+        help="PutMetricData E2ELatencyMs (and cold metrics) with dimension Probe",
+    )
+    ap.add_argument("--namespace", default="nyc-taxi-trip-duration")
+    ap.add_argument("--n", type=int, help=argparse.SUPPRESS)  # old --cold sample count
     args = ap.parse_args()
     base = args.url.rstrip("/")
     failures: list[str] = []
@@ -253,6 +462,60 @@ def main() -> int:
         # who was refused (root bypasses resource policies; roles do not).
         who = boto3.client("sts").get_caller_identity()["Arn"]
         print(f"      signing as {who}")
+    evidence: dict[str, Any] = {"target": fn or base, "at": time.time()}
+    cold_ms: list[float] = []
+    init_ms: list[float] = []
+    if args.cold:
+        restore = None
+        if args.force_new_environment:
+            target_fn = fn or args.function
+            if not target_fn:
+                ap.error("--force-new-environment needs --invoke or --function")
+            restore = recycle_environments(target_fn)
+            print(f"      recycled execution environments of {target_fn}")
+        try:
+            first = first_request(base, sign, fn)
+        finally:
+            if restore is not None:
+                restore_environment(fn or args.function, restore)
+        body = first["body"] if isinstance(first["body"], dict) else {}
+        report = first["report"]
+        if report is None and first["path"] == "url" and args.function:
+            report = find_report(
+                f"/aws/lambda/{args.function}",
+                first["request_id"] or "",
+                first["started_epoch_ms"],
+            )
+        first["report"] = report
+        evidence["cold"] = first
+        check(
+            "cold: fresh process",
+            first["status"] == 200 and body.get("requests_before") == 0,
+            f"HTTP {first['status']} instance {body.get('instance_id')} "
+            f"requests_before={body.get('requests_before')} "
+            f"started {body.get('process_started_at')}",
+        )
+        platform = (report or {}).get("init_duration_ms")
+        if first["path"] == "url" and not args.function:
+            print(
+                "SKIP  cold: platform init (no --function to look up the REPORT line)"
+            )
+        else:
+            check(
+                "cold: platform init observed",
+                platform is not None,
+                (report or {}).get("line", f"no REPORT for {first['request_id']}"),
+            )
+        check(
+            f"cold: end to end <= {args.cold_max_ms:.0f} ms",
+            first["e2e_ms"] <= args.cold_max_ms,
+            f"{first['e2e_ms']:.0f} ms "
+            f"(init {platform} ms, request {first['request_id']})",
+        )
+        cold_ms.append(first["e2e_ms"])
+        if platform is not None:
+            init_ms.append(platform)
+
     status, live, ms = call(f"{base}/health/live", sigv4=sign, function=fn)
     check("health/live", status == 200, f"HTTP {status} in {ms:.0f} ms {_short(live)}")
 
@@ -346,22 +609,44 @@ def main() -> int:
             f"largest difference {worst:.4f} min",
         )
 
-    if args.cold:
-        lat = []
-        for i in range(args.n):
-            _, _, ms = call(
-                f"{base}/predict",
-                "POST",
-                json.dumps(FIXTURE).encode(),
-                sigv4=sign,
-                function=fn,
-            )
-            lat.append(ms)
-            print(f"      call {i + 1}: {ms:.0f} ms")
-        print(
-            f"      first (cold): {lat[0]:.0f} ms  "
-            f"p50: {statistics.median(lat):.0f} ms  max: {max(lat):.0f} ms"
+    samples = args.latency_samples or (5 if args.cold else 0)
+    warm: list[float] = []
+    for _ in range(samples):
+        st, _, ms = call(
+            f"{base}/predict",
+            "POST",
+            json.dumps(FIXTURE).encode(),
+            sigv4=sign,
+            function=fn,
         )
+        if st == 200:
+            warm.append(ms)
+    if samples:
+        evidence["warm_ms"] = warm
+        check(
+            f"end-to-end latency p95 <= {args.warm_p95_max_ms:.0f} ms",
+            len(warm) == samples and p95(warm) <= args.warm_p95_max_ms,
+            f"{len(warm)}/{samples} ok, p50 {statistics.median(warm or [0]):.0f} ms, "
+            f"p95 {p95(warm or [0]):.0f} ms, max {max(warm or [0]):.0f} ms",
+        )
+    if args.publish_metrics:
+        print(
+            "      "
+            + publish(
+                args.publish_metrics,
+                {
+                    "E2ELatencyMs": warm,
+                    "ColdStartE2EMs": cold_ms,
+                    "InitDurationMs": init_ms,
+                },
+                args.namespace,
+            )
+        )
+    if args.evidence:
+        evidence["failures"] = failures
+        args.evidence.parent.mkdir(parents=True, exist_ok=True)
+        args.evidence.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
+        print(f"      evidence written to {args.evidence}")
 
     print(f"\n{len(failures)} failure(s)" if failures else "\nall checks passed")
     return 1 if failures else 0

@@ -102,6 +102,12 @@ jobs:
         run: |
           # By digest, not by tag: what was tested is exactly what runs, and
           # it cannot be repointed afterwards.
+          PREV=$(aws lambda get-function --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            --query Code.ImageUri --output text)
+          # New code means no warm environment can exist: the next invoke is
+          # the cold start, measured and proven by deploy_check --cold. The
+          # same digest again recycles nothing, so there is nothing to measure.
+          if [ "$PREV" != "$IMAGE_URI" ]; then echo "COLD=true" >> "$GITHUB_ENV"; fi
           aws lambda update-function-code \
             --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
             --image-uri "$IMAGE_URI" >/dev/null
@@ -111,15 +117,33 @@ jobs:
           echo "running: $RUNNING"
           test "$RUNNING" = "$IMAGE_URI" || { echo "Lambda is not running the image we pushed"; exit 1; }
 
-      - name: Deploy check (version, fixture prediction, malformed -> 422, cold start)
+      - name: Deploy check (cold start first, then version, fixtures, malformed -> 422)
         run: |
           # Through the Lambda API: proves the container and the service even
           # if the URL edge were misconfigured. The next step checks the edge.
+          # --cold measures the first request and fails unless the app reports
+          # a fresh process AND the platform REPORT line carries Init Duration.
+          COLD_ARGS=()
+          if [ "${COLD:-}" = "true" ]; then
+            COLD_ARGS=(--cold --publish-metrics deploy --evidence "coldstart/$RELEASE.json")
+          else
+            echo "::notice::image unchanged; no new execution environment, cold start not measured"
+          fi
           uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            "${COLD_ARGS[@]}" \
             --expect-version ${{ steps.champ.outputs.version }} \
             --expect-fixture models/champion_fixture.csv \
             --models-dir build/champion/models --reference-dir build/champion/reference \
-            --malformed --cold --n 5
+            --malformed
+
+      - name: Keep the cold-start evidence
+        if: always() && env.COLD == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coldstart-${{ env.RELEASE }}
+          path: coldstart/
+          retention-days: 90
+          if-no-files-found: warn
 
       # The endpoint callers use: HTTP to the Function URL, SigV4-signed as
       # this non-root role (identity policy grants InvokeFunctionUrl AND

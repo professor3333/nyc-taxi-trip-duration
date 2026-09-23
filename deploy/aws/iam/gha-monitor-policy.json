@@ -2,6 +2,7 @@
   "Version": "2012-10-17",
   "Statement": [
     {"Sid": "ProbeService", "Effect": "Allow", "Resource": "arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME",
-     "Action": ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]}
+     "Action": ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]},
+    {"Sid": "PublishProbeMetrics", "Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*", "Condition": {"StringEquals": {"cloudwatch:namespace": "nyc-taxi-trip-duration"}}}
   ]
 }

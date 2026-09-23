@@ -49,19 +49,65 @@ trip, join the result) would be a separate feature.
   through the Lambda API and over HTTP against the Function URL (SigV4 as
   the Actions role); failure opens/updates one `service-health` issue,
   recovery closes it.
-- **CloudWatch** (created by `deploy/aws/lambda.sh`), namespace
-  `nyc-taxi-trip-duration`, log retention 14 days:
+- **CloudWatch** (`deploy/aws/monitoring.sh`, run by `lambda.sh` or alone),
+  log retention 14 days, 14 alarms. Every alarm notifies the
+  `nyc-taxi-trip-duration-alerts` topic on **ALARM and on OK**. Three layers,
+  because each is blind where the others see:
 
-  | metric | pattern | alarm |
-  |---|---|---|
-  | `ErrorCount` | `level = ERROR` | ≥ 1 in 5 min |
-  | `FallbackCount` | `model_kind = fallback` on a request | ≥ 1 in 5 min |
-  | `InvalidRequestCount` | `event = validation_error` | > 50 in 5 min |
-  | `RequestCount` | every request line | — (denominator for rates) |
-  | `LatencyMs` | `$.latency_ms` | p95 > 2000 ms for 10 min |
-  | `PredictionMin` | `$.prediction_min` | p50 > 40 min for 3 h |
+  | layer | metric (namespace) | source | alarm |
+  |---|---|---|---|
+  | app | `ErrorCount` | `level = ERROR` | ≥ 1 in 5 min |
+  | app | `FallbackCount` | `model_kind = fallback` on a request | ≥ 1 in 5 min |
+  | app | `InvalidRequestCount` | `event = validation_error` | > 50 in 5 min |
+  | app | `RequestCount` | every request line | — (denominator) |
+  | app | `LatencyMs` | `$.latency_ms` (in-handler only) | p95 > 2000 ms for 10 min |
+  | app | `PredictionMin` | `$.prediction_min` (single `/predict`) | p50 > 40 min for 3 h |
+  | app | `BatchPredictionP50Min` | `$.batch_prediction_p50_min` (one summary per `/predict/batch`) | p50 > 40 min for 3 h |
+  | platform | `TimeoutCount` | text line `Task timed out` | ≥ 1 in 5 min |
+  | platform | `InitFailureCount` | `INIT_REPORT … Status: error/timeout`, `Runtime exited` | ≥ 1 in 5 min |
+  | platform | `Errors` (AWS/Lambda) | function errors, incl. init | ≥ 1 in 5 min |
+  | platform | `Throttles` (AWS/Lambda) | concurrency cap (reserved = 5) | ≥ 1 in 5 min |
+  | platform | `Url5xxCount` (AWS/Lambda) | 5xx at the URL edge | ≥ 1 in 5 min |
+  | platform | `UrlRequestLatency` (AWS/Lambda) | URL edge, **includes init** | p95 > 45 s in 5 min |
+  | outside | `E2ELatencyMs{Probe=monitor}` | `deploy_check` from a GitHub runner, 10 warm calls/day | p95 > 1500 ms |
+  | outside | `ColdStartE2EMs{Probe=deploy}` | first request after each new image | max > 45 s |
 
-  All five alarms notify the `nyc-taxi-trip-duration-alerts` SNS topic.
+  Value metrics (`LatencyMs`, `PredictionMin`, `BatchPredictionP50Min`) have
+  **no default value**: CloudWatch emits a filter's default for every log line
+  that does not match, so the old `defaultValue=0` put a 0 into the latency
+  and prediction distributions for each non-request line and dragged every
+  percentile down. Counts keep default 0 so a quiet period reads as 0.
+  Batch requests are summarised (size, median, max) on their request line
+  and never mixed into the single-prediction metric. Patterns for the
+  platform lines were checked with `TestMetricFilter` against real line shapes
+  on 2026-09-23 (init timeout, init error and runtime exit match; a
+  successful `REPORT` and JSON lines containing `"status": "error"` do not).
+
+- **Freshness** (`scripts/freshness.py`, daily in `monitor.yml`): the service
+  can be healthy while nothing behind it advances. It opens a `freshness`
+  issue when the newest month on `main` is more than 5 months old, the
+  champion's newest training month more than 8, or no `retrain.yml` `train`
+  job has succeeded for 21 days. It closes the issue when all three are
+  fresh. On 2026-09-23: data 17 months (2025-04), model 22 months (2024-11),
+  last train 0.4 days. **Two of the three are stale.** The weekly retrain
+  advances one month per run, and TLC has published through 2026-07.
+
+- **Cold start** (`deploy_check --cold`, every deploy that changes the
+  image): the *first* request after the update is measured end to end and
+  must be provably cold. The app reports `requests_before == 0` for its
+  process, and the platform's `REPORT` line for that request (log tail of the
+  invoke) carries `Init Duration`. It must finish within 45 s. The evidence
+  JSON is kept as a 90-day workflow artifact and published as
+  `ColdStartE2EMs` / `InitDurationMs`. CI proves the app side on every PR:
+  a fresh container passes, and the same container once warm fails.
+
+- **Alert delivery** (`scripts/alarm_drill.py`): writes one real ERROR line
+  to the log group (`alarm-drill` stream). The drill passes only if
+  `ErrorCount` goes to ALARM and then OK, CloudWatch records a *successful*
+  SNS action for both, and SNS counts two deliveries to a *confirmed*
+  subscription. It refuses to start while the only subscription is
+  `PendingConfirmation`, which was the case on 2026-09-23: until the owner
+  confirms the email, every alarm fires into nothing.
 
 ### Logs Insights queries (saved here; run in the Lambda log group)
 
