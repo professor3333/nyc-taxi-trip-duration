@@ -1,0 +1,23 @@
+{
+  "month": "2025-03",
+  "verdict": "pass",
+  "reasons": [],
+  "candidate": {
+    "mae_test_model": 3.5185855370368846,
+    "mae_test_fallback": 3.843729055004004,
+    "train_months": [
+      "2024-10",
+      "2024-11",
+      "2024-12",
+      "2025-01"
+    ],
+    "git_sha": "368b5c9328ab13f9f255361d9e22bfb000e1e43d"
+  },
+  "champion": {
+    "version": 3,
+    "mae_at_promotion": 3.789785,
+    "promotion_test_month": "2025-01",
+    "mae_prospective_on_month": 3.645379145853654
+  },
+  "decided_at": "2026-09-23T03:30:22+00:00"
+}
