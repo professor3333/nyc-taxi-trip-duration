@@ -1,39 +1,54 @@
 # The pipeline. `dvc repro` runs every stage whose deps or params changed.
-# Each stage is `uv run python -m tripduration.<stage>`; I/O lives at the
-# stage entry point, logic in importable functions with tests.
-
+# Each stage is `uv run --locked python -m tripduration.<stage>`; I/O lives at
+# the stage entry point, logic in importable functions with tests.
+#
+# Every input that can change a stage's output is declared (audit:
+# docs/pipeline_inputs.md; enforced by tests/test_dvc_deps.py):
+#   - the environment: uv.lock (every resolved package version) and
+#     .python-version (the interpreter). pyproject.toml is deliberately NOT a
+#     dep - `uv run --locked` refuses to run when uv.lock is stale against it,
+#     so a dependency edit cannot reach a stage without changing uv.lock, and
+#     lint/test config edits do not retrain the model;
+#   - every tripduration module the stage imports, transitively;
+#   - exactly the params keys the stage reads (paths are templated from them).
 stages:
   validate:
     desc: Normalise raw months to the canonical schema and apply ADR-0002 validity rules
-    cmd: uv run python -m tripduration.validate
+    cmd: uv run --locked python -m tripduration.validate
     deps:
       - src/tripduration/validate.py
       - src/tripduration/ingest.py
       - src/tripduration/config.py
+      - uv.lock
+      - .python-version
       - configs/schema_raw.yaml
-      - data/raw/yellow
+      - ${data.raw_dir}
     params:
-      - data
+      - data.raw_dir
+      - data.validated_dir
+      - data.timezone
       - validity
     outs:
-      - data/validated
+      - ${data.validated_dir}
       - reports/validation:
           cache: false        # small JSON; lives in git so `git log` shows counts
 
   quality:
     desc: Data-quality report and acceptance rules; a failure stops the pipeline before train
-    cmd: uv run python -m tripduration.quality
+    cmd: uv run --locked python -m tripduration.quality
     deps:
       - src/tripduration/quality.py
       - src/tripduration/validate.py
       - src/tripduration/ingest.py
       - src/tripduration/config.py
+      - uv.lock
+      - .python-version
       - configs/schema_raw.yaml
-      - data/raw/yellow
-      - data/validated
+      - ${data.raw_dir}
+      - ${data.validated_dir}
     params:
-      - data
-      - validity
+      - data.raw_dir
+      - data.validated_dir
       - quality
     outs:
       - reports/quality:
@@ -41,19 +56,25 @@ stages:
 
   prepare:
     desc: Derive ADR-0003 splits from validated months and build ADR-0005 features
-    cmd: uv run python -m tripduration.prepare
+    cmd: uv run --locked python -m tripduration.prepare
     deps:
+      - uv.lock
+      - .python-version
       - src/tripduration/prepare.py
       - src/tripduration/features.py
       - src/tripduration/schema.py
       - src/tripduration/config.py
+      - src/tripduration/validate.py     # imports PICKUP
+      - src/tripduration/ingest.py       # imported by validate.py
       - configs/holidays.csv
-      - data/reference/zone_centroids.csv
-      - data/validated
+      - ${data.reference_dir}/zone_centroids.csv
+      - ${data.validated_dir}
       - reports/quality        # prepare only runs when the acceptance rules passed
     params:
       - seed
       - split
+      - data.validated_dir
+      - data.reference_dir
     outs:
       - data/processed
       - reports/prepare.json:
@@ -61,14 +82,16 @@ stages:
 
   train:
     desc: Fit the fallback lookup table and the model on training months; log an MLflow run
-    cmd: uv run python -m tripduration.train
+    cmd: uv run --locked python -m tripduration.train
     deps:
+      - uv.lock
+      - .python-version
       - src/tripduration/train.py
       - src/tripduration/fallback.py
       - src/tripduration/features.py
       - src/tripduration/config.py
       - configs/holidays.csv
-      - data/reference/zone_centroids.csv
+      - ${data.reference_dir}/zone_centroids.csv
       - data/processed/train.parquet
       - data/processed/val.parquet
       - reports/prepare.json
@@ -78,6 +101,7 @@ stages:
       - fallback
       - model
       - mlflow
+      - data.reference_dir   # train.TRAIN_PARAM_KEYS mirrors this list (params_hash)
     outs:
       - models/model.pkl
       - models/fallback_table.parquet
@@ -86,18 +110,24 @@ stages:
 
   evaluate:
     desc: Model and fallback metrics on validation and test months; MAE by hour and borough pair
-    cmd: uv run python -m tripduration.evaluate
+    cmd: uv run --locked python -m tripduration.evaluate
     deps:
+      - uv.lock
+      - .python-version
       - src/tripduration/evaluate.py
       - src/tripduration/fallback.py
       - src/tripduration/features.py
+      - src/tripduration/config.py
+      - src/tripduration/train.py        # imports the artefact file names
       - configs/holidays.csv
-      - data/reference/zone_centroids.csv
+      - ${data.reference_dir}/zone_centroids.csv
       - data/processed/val.parquet
       - data/processed/test.parquet
       - models/model.pkl
       - models/fallback_table.parquet
       - models/model_meta.json
+    params:
+      - data.reference_dir
     metrics:
       - metrics/eval.json:
           cache: false
