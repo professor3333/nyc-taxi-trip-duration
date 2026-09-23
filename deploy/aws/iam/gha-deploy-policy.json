@@ -10,6 +10,7 @@
                 "lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]},
     {"Sid": "DvcReadChampion", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],
      "Resource": ["arn:aws:s3:::S3_BUCKET", "arn:aws:s3:::S3_BUCKET/dvc/*"]},
-    {"Sid": "PublishProbeMetrics", "Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*", "Condition": {"StringEquals": {"cloudwatch:namespace": "nyc-taxi-trip-duration"}}}
+    {"Sid": "PublishProbeMetrics", "Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*", "Condition": {"StringEquals": {"cloudwatch:namespace": "nyc-taxi-trip-duration"}}},
+    {"Sid": "ReadColdStartEvidence", "Effect": "Allow", "Action": ["logs:FilterLogEvents", "logs:GetLogEvents"], "Resource": ["arn:aws:logs:AWS_REGION:ACCOUNT_ID:log-group:/aws/lambda/LAMBDA_FUNCTION_NAME", "arn:aws:logs:AWS_REGION:ACCOUNT_ID:log-group:/aws/lambda/LAMBDA_FUNCTION_NAME:*"]}
   ]
 }

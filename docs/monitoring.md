@@ -94,9 +94,14 @@ trip, join the result) would be a separate feature.
 
 - **Cold start** (`deploy_check --cold`, every deploy that changes the
   image): the *first* request after the update is measured end to end and
-  must be provably cold. The app reports `requests_before == 0` for its
-  process, and the platform's `REPORT` line for that request (log tail of the
-  invoke) carries `Init Duration`. It must finish within 45 s. The evidence
+  must be provably cold. The app must report `requests_before == 0` for its
+  process (the Web Adapter's readiness polls don't count). In the platform's
+  log stream for the execution environment that served it, that request's
+  `START` must be the first. The `INIT_REPORT` status and init duration are
+  recorded, and the request must finish within 45 s. (`Init Duration` on
+  REPORT is not used as the proof: it is missing when init hit the 10 s limit
+  and was redone in the invoke, which is how this service cold-starts today,
+  per ADR-0008's 2026-09-23 amendment.) The evidence
   JSON is kept as a 90-day workflow artifact and published as
   `ColdStartE2EMs` / `InitDurationMs`. CI proves the app side on every PR:
   a fresh container passes, and the same container once warm fails.

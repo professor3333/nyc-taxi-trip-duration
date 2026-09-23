@@ -168,6 +168,19 @@ def test_only_deploy_can_change_the_service(roles: dict[str, Any]) -> None:
     assert "s3:PutObject" not in deploy
 
 
+def test_deploy_reads_only_its_own_log_group(roles: dict[str, Any]) -> None:
+    (policy,) = roles[ROLE.format("deploy")]["policies"].values()
+    (st,) = [s for s in policy["Statement"] if s["Sid"] == "ReadColdStartEvidence"]
+    assert set(st["Action"]) == {"logs:FilterLogEvents", "logs:GetLogEvents"}
+    assert all(
+        r.startswith(
+            "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/"
+            "nyc-taxi-trip-duration"
+        )
+        for r in st["Resource"]
+    )
+
+
 def test_only_training_roles_write_the_dvc_remote(roles: dict[str, Any]) -> None:
     for name in ("retrain", "reproduce"):
         assert "s3:PutObject" in _actions(roles[ROLE.format(name)])

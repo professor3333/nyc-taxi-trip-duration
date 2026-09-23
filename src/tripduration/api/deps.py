@@ -60,6 +60,10 @@ class Settings:
     # More is slower: each sklearn predict already uses OMP_NUM_THREADS cores,
     # and parallel calls oversubscribe them (docs/failure_modes.md, measured).
     predict_workers: int = 1
+    # The Lambda Web Adapter polls this path until the app answers, inside the
+    # execution environment, before any invocation. Those polls are not
+    # requests anyone made, so they do not count towards `requests_before`.
+    readiness_probe_path: str | None = None
     # Set when params.yaml or the environment is unusable. The service then
     # starts, says why on /health, and answers /predict with 503 rather than
     # guessing the accepted departure window.
@@ -74,6 +78,7 @@ class Settings:
             holidays_path=Path(env.get("HOLIDAYS_PATH", "configs/holidays.csv")),
             params_path=Path(env.get("PARAMS_PATH", "params.yaml")),
             log_level=env.get("LOG_LEVEL", "INFO"),
+            readiness_probe_path=env.get("AWS_LWA_READINESS_CHECK_PATH") or None,
         )
         try:
             api: dict[str, Any] = {}
