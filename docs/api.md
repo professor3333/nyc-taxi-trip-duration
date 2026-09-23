@@ -45,6 +45,7 @@ Pydantic v2, `extra="forbid"`. Every rejection is **422** with a
 | missing field, wrong type, extra field, empty object, empty body, non-JSON body | 422 |
 | zone id outside 1–263 — including **264 (Unknown)** and **265 (Outside NYC)**, which the model is never trained on | 422 |
 | `departure_time` outside `params.yaml › api.departure_min … departure_max` | 422 |
+| `departure_time` whose conversion to New York leaves the representable range (`0001-01-01T00:00:00Z`, `9999-12-31T23:59:59-12:00`) | 422 — see below |
 | batch larger than `api.max_batch` | 422 |
 
 A malformed request is 422 even when the service is otherwise unavailable:
@@ -67,6 +68,15 @@ the request is wrong regardless of what could have served it.
   cannot occur in the data and is harmless as a query.
 - Sub-minute precision is accepted and ignored; the finest feature is
   minute-of-day.
+- **Timestamps at the edge of the representable range.** Converting an aware
+  timestamp near `datetime.min` or `datetime.max` can leave the range Python
+  can represent — `0001-01-01T00:00:00Z` is year 0 in New York. That is a
+  malformed request, not a server fault, so the conversion is guarded and the
+  answer is 422 with a field message. Until 2026-09-23 it was an unhandled
+  `OverflowError` and therefore a 500: Pydantic converts `ValueError` and
+  `AssertionError` into validation errors but not `OverflowError`. The fuzz
+  test now generates datetimes (it previously generated only text and
+  integers for this field, which is why the bug survived).
 
 ## Degradation and 503
 

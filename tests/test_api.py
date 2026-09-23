@@ -11,7 +11,7 @@ import pickle
 import shutil
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +210,45 @@ def test_non_json_and_empty_bodies(client: TestClient) -> None:
     assert r.status_code in (415, 422) and "request_id" in r.json()
 
 
+@pytest.mark.parametrize(
+    "departure",
+    [
+        "0001-01-01T00:00:00Z",  # min datetime: UTC -> year 0 in New York
+        "0001-01-01T00:00:00+14:00",  # min datetime, largest positive offset
+        "0001-01-02T00:00:00+14:00",
+        "9999-12-31T23:59:59.999999-12:00",  # max datetime, negative offset
+        "9999-12-31T23:59:59.999999-23:59",
+        "0001-01-01T00:00:00.000001+00:01",
+    ],
+)
+def test_extreme_aware_timestamps_are_422_not_500(
+    client: TestClient, departure: str
+) -> None:
+    """Regression: converting these to America/New_York overflows datetime's
+    range. `astimezone` raises OverflowError, which Pydantic does not turn
+    into a validation error, so it used to reach the 500 handler."""
+    r = client.post("/predict", json={**GOOD, "departure_time": departure})
+    assert r.status_code == 422, r.text
+    js = r.json()
+    assert "request_id" in js
+    assert any(e["field"] == "departure_time" for e in js["errors"]), js
+
+
+def test_extreme_aware_timestamp_in_batch_is_422(client: TestClient) -> None:
+    r = client.post(
+        "/predict/batch",
+        json={"items": [GOOD, {**GOOD, "departure_time": "0001-01-01T00:00:00Z"}]},
+    )
+    assert r.status_code == 422
+    assert "departure_time" in json.dumps(r.json())
+
+
+def test_extreme_naive_timestamps_are_422(client: TestClient) -> None:
+    for departure in ("0001-01-01T00:00:00", "9999-12-31T23:59:59"):
+        r = client.post("/predict", json={**GOOD, "departure_time": departure})
+        assert r.status_code == 422, departure
+
+
 # --- fuzz: nothing yields a 500 -------------------------------------------------------
 
 _json = st.recursive(
@@ -224,13 +263,33 @@ _json = st.recursive(
     ),
     max_leaves=8,
 )
+# Datetimes the API is most likely to mishandle: the extremes of the
+# representable range, every offset, and both DST transitions. The original
+# fuzz produced only text and integers for this field, which is exactly why
+# the aware-timestamp overflow was never caught.
+_datetimes = st.one_of(
+    st.datetimes(timezones=st.timezones() | st.just(UTC)).map(datetime.isoformat),
+    st.datetimes(
+        min_value=datetime(1, 1, 1), max_value=datetime(9999, 12, 31, 23, 59, 59)
+    ).map(datetime.isoformat),
+    st.sampled_from(
+        [
+            "0001-01-01T00:00:00Z",
+            "0001-01-01T00:00:00+14:00",
+            "9999-12-31T23:59:59.999999-12:00",
+            "2024-11-03T01:30:00",  # the ambiguous hour
+            "2024-03-10T02:30:00",  # the hour that does not exist
+            "2024-12-10T17:30:00+00:00:01",  # a one-second offset
+        ]
+    ),
+)
 _near_valid = st.fixed_dictionaries(
     {
         "pickup_zone_id": st.integers(-5, 300) | st.text(max_size=5) | st.none(),
         "dropoff_zone_id": st.integers(-5, 300)
         | st.floats(allow_nan=False, allow_infinity=False)
         | st.none(),
-        "departure_time": st.text(max_size=30) | st.integers() | st.none(),
+        "departure_time": _datetimes | st.text(max_size=30) | st.integers() | st.none(),
     }
 )
 
