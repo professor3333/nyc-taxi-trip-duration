@@ -110,7 +110,7 @@ rolling back is: move the alias, write the pointer, commit, and let
 
 ```
 make rollback REASON="..."                     # alias + models/champion*.json
-git add models/champion*.json docs/promotions.md && git commit && git push
+git switch -c release/v<n> && git add models/champion.json models/champion_meta.json models/champion_fixture.csv docs/promotions.md && git commit -m "..." && git push -u origin release/v<n> && gh pr create --fill --base main   # main is protected: via PR (docs/runbook.md "Release a champion")
 # deploy.yml: fetch that version's artefacts by content hash -> build ->
 #             push an immutable tag -> update Lambda by digest -> deploy_check
 ```

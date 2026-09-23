@@ -1,4 +1,4 @@
-.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-api compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -49,11 +49,14 @@ train-env:    ## Build the canonical training image (Dockerfile target `train`) 
 pipeline-smoke: ## Whole pipeline on tests/fixtures in a temp dir with SQLite MLflow (what CI runs)
 	uv run pytest tests/test_pipeline.py -q
 
-reproduce:    ## Exit criterion 1: clone REV (default HEAD) -> dvc pull -> repro in train env -> bit-identical predictions
-	scripts/reproduce.sh
+reproduce:    ## Exit criterion 1: clone REV (default HEAD) -> inputs (SOURCE=remote|public) -> repro in train env -> bit-identical predictions
+	REV="$(REV)" SOURCE="$(or $(SOURCE),remote)" scripts/reproduce.sh
 
-compose-up:   ## Start MLflow tracking server + Postgres (http://localhost:5001)
-	docker compose up -d --build --wait
+compose-up:   ## Start MLflow tracking server + Postgres (http://localhost:5001); needs no model files
+	docker compose up -d --build --wait postgres mlflow
+
+compose-api:  ## Build and start the API from local models/ (after dvc pull or make pipeline): http://localhost:8080
+	docker compose up -d --build --wait api
 
 compose-down: ## Stop the stack (volumes kept; add -v to wipe)
 	docker compose down
