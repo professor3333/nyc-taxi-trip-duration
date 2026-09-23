@@ -238,5 +238,9 @@ Tick a line only when its proof command passes, not when the code is written.
   - `BatchPredictionMedianHigh` for batches;
   - value metrics no longer default to 0.
 - **First live cold-start proof found a real defect** (deploy run 35865460403). Init hits Lambda's 10 s limit (`INIT_REPORT … Status: timeout`), and Lambda redoes init inside the first request: 16 s end to end, REPORT without `Init Duration`. The "≈ 24 s init" in ADR-0008 was this. The app also counted the Web Adapter's readiness polls as requests. Both proofs were reworked: readiness polls are excluded, and the platform proof is now "first `START` in the environment's log stream", tested on the observed stream. The init time itself is not fixed yet (ADR-0008 lists the candidates).
+- **Live proof after the fix:**
+  - **Deploy run 35868362893** (image `23ee944`, v3): first request `requests_before=0`, 16.6 s end to end (limit 45 s). Its environment's stream shows it as the first `START`, after `INIT_REPORT … 10000.09 ms … Status: timeout`; the platform half was read with owner credentials because the legacy role can't read logs. 80 of 80 fixtures, warm p95 70 ms.
+  - **Monitor run 35868966635**: end-to-end p95 156 ms (10 calls from a runner); freshness issue #63 opened.
+  - `InitFailures` went to ALARM on that deploy's cold start, the only alarm firing. CloudWatch records "Successfully executed action" to SNS for it, but nothing was delivered: the subscription is pending. `alarm_drill.py` refuses for exactly that reason (exit 1).
 - **Freshness** (`scripts/freshness.py`, daily): red today on data (17 months) and model (22 months); retrain green (0.4 days).
 - **Alert delivery:** the only SNS subscription is still `PendingConfirmation`, so no alarm has ever reached anyone. `alarm_drill.py` (real ERROR line → alarm → email → OK → email) refuses to run until the owner confirms the email.
