@@ -75,8 +75,8 @@ fi
 # Who may invoke the URL. Since October 2025 a URL call needs BOTH
 # lambda:InvokeFunctionUrl and lambda:InvokeFunction; the second is granted
 # only for calls that arrive through the URL (--invoked-via-function-url).
-# With AWS_IAM, a same-account *role* still needs a resource-policy statement
-# (only the account root bypasses it), so the GitHub Actions role is granted.
+# With AWS_IAM, a same-account role may be granted by its identity policy OR
+# here; the Actions role has both, so either one alone keeps it working.
 # The statements of the other auth mode are removed, so switching modes never
 # leaves a public grant behind.
 POLICY_SIDS=$(aws lambda get-policy "${FN[@]}" --query Policy --output text 2>/dev/null | jq -r '.Statement[].Sid' || true)

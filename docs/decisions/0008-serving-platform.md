@@ -45,8 +45,9 @@ a laptop over the internet (≈ 16 ms server-side per the request logs); the
 rest is TLS, transit and SigV4. Cold start remains the cost to beat: slimming
 the image (pyarrow is only needed for the fallback table) is the first lever.
 
-**2. Function URL auth NONE → AWS_IAM.** Not a preference: this account
-**refuses public function URLs**. With `AuthType NONE` and a correct
+**2. Function URL auth NONE → AWS_IAM.** *(The "account refuses" diagnosis
+below is superseded 2026-09-23 — the grant lacked `lambda:InvokeFunction`.)*
+As recorded at the time: this account **refuses public function URLs**. With `AuthType NONE` and a correct
 resource policy (`Principal: "*"`, `lambda:InvokeFunctionUrl`,
 `FunctionUrlAuthType: NONE`) every request returned
 `403 AccessDeniedException`, including after deleting and recreating both the
@@ -60,7 +61,9 @@ group); the GitHub OIDC role gains `lambda:InvokeFunctionUrl` and
 checking. `LAMBDA_URL_AUTH_TYPE` in `deploy/aws/env.sh` flips it back to
 `NONE` if the account ever allows it.
 
-**2b. Automated checks call the Lambda API, not the Function URL.** With
+**2b. Automated checks call the Lambda API, not the Function URL.**
+*(Superseded 2026-09-23 — see the correction below; the cause was a missing
+permission.)* With
 `AWS_IAM` auth the URL answers the **account root** and nobody else: a plain
 IAM user with `lambda:InvokeFunctionUrl` on the function, and the GitHub OIDC
 role with the same permission plus a matching resource-policy statement, both
@@ -96,19 +99,35 @@ mode's grants, so going back to `AWS_IAM` never leaves a public grant behind.
 against the previous script. `deploy/aws/drill_lambda.sh` runs the same
 sequence against a scratch function in the real account and deletes it.
 
-**Probable cause of 2 and 2b: a missing permission, not an account block.**
-Since October 2025, invoking a Function URL needs **both**
-`lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` (the second scoped with
-`lambda:InvokedViaFunctionUrl`) — see the Lambda guide "Control access to
-Lambda function URLs". The live function's policy had only
-`InvokeFunctionUrl`, which explains every observation above: root bypasses
-resource policies, the simulator was asked about `InvokeFunctionUrl` alone,
-and `--invoke` succeeds because it uses the identity policy's
-`InvokeFunction`. `lambda.sh` now grants both (`github-actions-url` +
-`github-actions-invoke`, or `public-url` + `public-invoke` for `NONE`).
-**Not yet verified live:** the drill and the reconcile run on the serving
-function have not been executed (they add a resource-policy grant, which
-needs the owner's go-ahead). Until verified, CI keeps using `--invoke`.
+**Correction to 2 and 2b — there was no account restriction.** Since
+October 2025, invoking a Function URL needs **both** `lambda:InvokeFunctionUrl`
+and `lambda:InvokeFunction` (Lambda guide, "Control access to Lambda function
+URLs"). For a same-account principal either the identity policy or the
+function's resource policy may grant them.
+
+- *2b, IAM auth — verified.* When the Actions role got `403` (deploy run
+  35732868805, 2026-09-22 13:22 UTC) its identity policy granted
+  `InvokeFunctionUrl` but **not** `InvokeFunction`; that was added ten
+  minutes later (`626a6e8`) for the `--invoke` workaround, and the URL was
+  never retried as the role. Retried on 2026-09-23 (monitor run 35824718485):
+  an HTTP request to the Function URL, SigV4-signed as
+  `assumed-role/nyc-taxi-trip-duration-github-actions`, answered **200** on
+  every route, the 80-row fixture matched, and all nine malformed bodies were
+  422. The simulator "allowed" because it was asked about `InvokeFunctionUrl`
+  alone; root succeeded because root is not subject to these policies.
+- *2, auth NONE — explained, not re-tested.* The public statement granted
+  only `InvokeFunctionUrl`, which by the same rule is insufficient. `lambda.sh`
+  now also grants `lambda:InvokeFunction` to `*` with
+  `lambda:InvokedViaFunctionUrl`. Whether `NONE` then answers is unverified:
+  running `make lambda-drill` (which checks an unsigned call returns 200) needs
+  the owner's go-ahead, because it makes a scratch URL public for a minute.
+  `AWS_IAM` stays the decision on its merits: nothing needs anonymous access.
+
+**Checks now use both paths.** `deploy.yml` and `monitor.yml` run
+`deploy_check.py --invoke` (the service, independent of the edge) **and**
+`deploy_check.py --url <Function URL> --sigv4` (the real HTTP endpoint, as the
+non-root Actions role). A failure in only the second isolates the URL edge or
+its auth. The transcript prints the signing principal.
 
 ## Consequences
 

@@ -125,6 +125,10 @@ wrong type, zone 999, zone 264, time out of window, extra field, empty body,
 non-JSON body, empty object) returned **422** with a `request_id` and a
 field-level message, e.g.
 `{"request_id":"21b90accb6c2487f","errors":[{"field":"pickup_zone_id","message":"Input should be less than or equal to 263"}]}`.
+**Over the live URL itself (2026-09-23):** monitor run 35824718485 sent the
+same nine bodies as HTTP requests to the Function URL, SigV4-signed as the
+non-root Actions role: all **422** with `request_id`; `deploy.yml` and
+`monitor.yml` now run this URL check on every deploy and daily.
 CloudWatch Logs Insights over the same window shows the matching
 `validation_error` WARNING lines and one `request` line per call with
 `status: 422`.
