@@ -184,4 +184,4 @@ Tick a line only when its proof command passes, not when the code is written.
 
 - `reproduce.yml mode=regenerate` (run 35829309690): every stage in `tripduration-train:10f6058c0294` on a runner (Linux x86_64, glibc 2.41). Outputs pushed to DVC and committed (`5494091`). Metrics identical to the macOS-produced ones, fixture within the old rounding.
 - `mode=verify` (run 35830238679): fresh clone, `--network none`, `--force --no-run-cache`: **80/80 predictions bit-identical, every metric identical**.
-- Negative control (run 35831123575, `d162ffc` with rounded macOS results): 161 differences reported, but the run concluded success. That is the `bash -e` / no-pipefail defect fixed in PR #55.
+- Negative control (run 35831123575, `d162ffc` with rounded macOS results): 137 differences reported, but the run concluded success. That is the `bash -e` / no-pipefail defect fixed in PR #55.

@@ -100,7 +100,7 @@ linux/amd64, 16 GB); the full window does not fit a 3.9 GiB Docker VM.
 
 **Negative control (run 35831123575):** `verify` on `d162ffc`, whose
 committed results were the old 6-dp-rounded, macOS-produced files. The
-comparator reported 161 differences (largest 4.9e-7 min: the rounding the
+comparator reported 137 differences (largest 4.9e-7 min: the rounding the
 old 1e-9 check could not see). **The run still concluded `success`**: steps
 ran as `bash -e` without `pipefail`, so `make reproduce | tee` passed.
 Every workflow now sets `shell: bash` (PR #55, `tests/test_workflows.py`).
