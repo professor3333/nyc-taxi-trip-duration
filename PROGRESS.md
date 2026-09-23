@@ -141,3 +141,9 @@ Tick a line only when its proof command passes, not when the code is written.
 - **Found:** bot-opened candidate PRs get `ci` held at `action_required`, so they could never be merged under branch protection. A dispatched `ci` run does not count (suite not linked to the PR). `make approve-ci BRANCH=retrain/<M>` is the human data-acceptance step; #43 went BLOCKED → CLEAN after it.
 - **Corrected:** concurrency does drop runs — GitHub keeps one pending run per group; a third dispatch cancelled the pending second (35813964651). Safe for the schedule because `plan` works from current state; a specific dispatched month must be re-dispatched.
 - `gh pr edit` fails on this repo (GraphQL Projects-classic deprecation); the workflow edits PRs via REST.
+
+## Candidate PR CI path — 2026-09-23 (observed on Actions)
+
+- `retrain.yml` now finds the `pull_request` `ci` run on the candidate PR's head, comments its state, and **fails** if GitHub created none (PR #24's head had zero check runs, unreported).
+- `make candidate-ci BRANCH=retrain/<M>` (`scripts/candidate_ci.sh`): approve the held run, wait, assert required checks succeeded on the head **and** the PR is CLEAN. ADR-0010 (b) chooses this over a GitHub App token.
+- Proven on PR #46 (2025-04, run 35816149653, gate PASS 3.5062 vs 3.6649): BLOCKED + exit 2 before approval → `ci` success + CLEAN + exit 0 after → merged `47f3643`. Serving still v3.

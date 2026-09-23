@@ -145,6 +145,36 @@ ADR-0007's gate then **refused** the candidate: 3.756 is not below the
 champion's 3.623 on the same month. Recorded as a comment on the PR. The
 cycle also ran by hand for 2025-01 (champion v1 → 3.841, verdict ok), which
 is how v3 was promoted.
+
+**Complete path including the required check (2026-09-23).** A retrain that
+opens a PR is only half the workflow: the PR must pass branch protection.
+Run `35816149653` (dispatch, no inputs) planned 2025-04, trained on
+2024-10..2025-02 / val 2025-03 / test 2025-04, gate PASS (3.5062 vs champion
+v3 prospective 3.6649), and opened **PR #46**. Its last step found the
+required `ci` run on the head commit and commented:
+
+> Required check `ci` for `9123962…`: run 35816811535 is **held for
+> approval** (GitHub requires it for PRs opened by `GITHUB_TOKEN`).
+
+Before approval: PR `BLOCKED`; `scripts/candidate_ci.sh retrain/2025-04`
+exits 2 with `HELD: run 35816811535 awaits approval`. Then:
+
+```
+$ make candidate-ci BRANCH=retrain/2025-04
+PR #46  head 91239625842d28af75fcc3a954f29754045e130a
+required checks on main: ci
+ci runs on head: 35816811535 completed action_required
+approved run 35816811535
+check ci: success on 91239625842d28af75fcc3a954f29754045e130a
+PR #46 mergeStateStatus: CLEAN
+OK: #46's required checks passed; it can be merged to accept the data.
+```
+
+#46 merged (`47f3643`): 2025-04 accepted into `main`. The model is not
+registered or promoted; serving is still v3. Contrast: PR #24's head had
+**zero** check runs and nothing reported it; that is now a red job
+(ADR-0010 amendment b).
+
 ## 7. Compose runs API + MLflow + DB — MET (and the loop now ends on AWS)
 
 `docker compose up -d --wait` brings up `postgres` (healthy), `mlflow`
