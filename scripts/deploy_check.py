@@ -97,8 +97,8 @@ def invoke(
 
     Same container, same Web Adapter, same handlers as an HTTP request to the
     Function URL; only the URL edge itself is not exercised. Needed because
-    this account refuses Function URL invocations from every principal except
-    the account root (ADR-0008 amendment).
+    it reaches the function even when the URL edge refuses a request, so a
+    failure here and a pass there separates the service from the edge.
     """
     import boto3
 
@@ -246,6 +246,13 @@ def main() -> int:
         if not ok:
             failures.append(name)
 
+    if sign and not fn:
+        import boto3
+
+        # A 403 from the URL edge is only diagnosable if the transcript says
+        # who was refused (root bypasses resource policies; roles do not).
+        who = boto3.client("sts").get_caller_identity()["Arn"]
+        print(f"      signing as {who}")
     status, live, ms = call(f"{base}/health/live", sigv4=sign, function=fn)
     check("health/live", status == 200, f"HTTP {status} in {ms:.0f} ms {_short(live)}")
 
