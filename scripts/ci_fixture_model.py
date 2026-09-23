@@ -16,7 +16,7 @@ from pathlib import Path
 from tripduration import prepare, train, validate
 from tripduration.config import load_params
 from tripduration.features import ReferenceData
-from tripduration.ingest import load_schema
+from tripduration.raw_schema import load_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX = ROOT / "tests" / "fixtures"

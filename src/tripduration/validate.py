@@ -32,7 +32,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from tripduration.config import Params, ValidityParams, load_params
-from tripduration.ingest import MONTH_RE, RawSchema, load_schema, normalise
+from tripduration.raw_schema import MONTH_RE, RawSchema, load_schema, normalise
 
 log = logging.getLogger(__name__)
 

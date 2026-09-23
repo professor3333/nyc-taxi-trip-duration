@@ -65,7 +65,16 @@ job summary states why. Two decisions per candidate PR:
 
 ## Schema drift (ingest refuses a file)
 
-The error names the unknown column. Add it to `configs/schema_raw.yaml` (`variants` if a renamed column, a new optional column otherwise) in a reviewed PR; re-run ingest.
+The error names the unknown column. The refused file is in `data/quarantine/<service>/<month>.parquet` (inspect it with `uv run python -c "import pyarrow.parquet as pq; print(pq.read_schema('data/quarantine/yellow/YYYY-MM.parquet'))"`); `data/raw/` and the ingest report still hold the last accepted snapshot, so the pipeline keeps working on it. Add the column to `configs/schema_raw.yaml` (`variants` if a renamed column, a new optional column otherwise) in a reviewed PR; re-run ingest. `data/quarantine/` is git-ignored and never DVC-tracked; delete it once the drift is resolved.
+
+## Source access failure (ingest exits 1 with `SourceAccessError`)
+
+TLC answers 403 for a missing key, so a 403 is only "not published" when the month is new, recent, and the zone lookup still answers. The error names which of these failed:
+
+- `control object … also fails`: the whole distribution is refusing us. `curl -sI https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv` from another network; if that is 200, the runner's egress is blocked.
+- `missing, not pending`: the month is older than `MAX_PUBLICATION_LAG_MONTHS` (4, measured in `ingest.py`). Check the TLC page; if TLC is genuinely late, re-run with `--max-lag-months N` and record it here.
+- `was ingested at …`: TLC withdrew a month we hold. Nothing local changed; do not delete the snapshot. Find out why before retraining.
+- `GET refused`: HEAD succeeded but the download did not; re-run, then treat as the first case.
 
 ## Rotate the GitHub OIDC role
 

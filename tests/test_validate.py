@@ -14,7 +14,7 @@ import pytest
 
 from tripduration import validate as v
 from tripduration.config import Params
-from tripduration.ingest import RawSchema
+from tripduration.raw_schema import RawSchema
 
 NOV = "2024-11"
 T0 = datetime(2024, 11, 10, 8, 0)  # an ordinary Sunday morning

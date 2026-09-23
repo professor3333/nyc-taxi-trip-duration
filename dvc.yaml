@@ -17,7 +17,7 @@ stages:
     cmd: uv run --locked python -m tripduration.validate
     deps:
       - src/tripduration/validate.py
-      - src/tripduration/ingest.py
+      - src/tripduration/raw_schema.py
       - src/tripduration/config.py
       - uv.lock
       - .python-version
@@ -39,7 +39,7 @@ stages:
     deps:
       - src/tripduration/quality.py
       - src/tripduration/validate.py
-      - src/tripduration/ingest.py
+      - src/tripduration/raw_schema.py
       - src/tripduration/config.py
       - uv.lock
       - .python-version
@@ -65,7 +65,7 @@ stages:
       - src/tripduration/schema.py
       - src/tripduration/config.py
       - src/tripduration/validate.py     # imports PICKUP
-      - src/tripduration/ingest.py       # imported by validate.py
+      - src/tripduration/raw_schema.py   # imported by validate.py
       - configs/holidays.csv
       - ${data.reference_dir}/zone_centroids.csv
       - ${data.validated_dir}

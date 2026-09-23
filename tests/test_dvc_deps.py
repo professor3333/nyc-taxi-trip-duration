@@ -232,8 +232,8 @@ CASES = [
     ("n_threads", "params.yaml", _param("n_threads", 1), {"train"}),
     ("api-only", "params.yaml", _param("api.max_batch", 5), set()),
     (
-        "ingest.py",
-        "src/tripduration/ingest.py",
+        "raw_schema.py",
+        "src/tripduration/raw_schema.py",
         lambda t: t + "#\n",
         {"validate", "quality", "prepare"},
     ),

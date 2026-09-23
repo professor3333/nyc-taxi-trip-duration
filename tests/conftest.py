@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tripduration.config import Params, load_params
-from tripduration.ingest import RawSchema, load_schema
+from tripduration.raw_schema import RawSchema, load_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 

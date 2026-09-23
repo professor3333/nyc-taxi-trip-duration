@@ -192,3 +192,12 @@ Tick a line only when its proof command passes, not when the code is written.
 - Corrupt `champion.json`: the model serves, labelled `unregistered`, `/health` degraded. Missing or corrupt reference data, or unusable `params.yaml`/`LOG_LEVEL`: the process stays up and answers 503 (before, all of these prevented startup).
 - Bodies over 32 KiB get a 413 before JSON parsing, enforced on bytes received (chunked and false Content-Length included). Batch length is checked before item validation.
 - Prediction runs off the event loop through a CapacityLimiter (`predict_workers=1`). Measured with `scripts/bench_concurrency.py`: `/health/live` p95 under batch load 36 → 6 ms; single-client throughput unchanged; concurrency-8 throughput −24% (the plain thread pool was −53%, from OpenMP/GIL oversubscription).
+
+## Ingest can no longer lose an accepted snapshot — 2026-09-23
+
+- **Reproduced first** on `main`: (1) a corrupted local file with an unchanged remote ETag was skipped as "unchanged" and kept; (2) a republish with schema drift overwrote `data/raw/…` and then deleted it, leaving no local copy.
+- **Quarantine:** every download (months and zone lookup) lands in `data/quarantine/`; size and schema are checked there; only then is it renamed over `data/raw/`. A refused file (drift, not Parquet, truncated) stays in quarantine; the accepted file and its report are unchanged byte-for-byte. The rename replaces the inode, so a DVC cache hard link or symlink is never written through.
+- **Local integrity:** the same-ETag skip now also requires the local md5 to match the report; a corrupt or missing local file is fetched again.
+- **403/404 classified:** "not published" only when the month was never ingested, is within `MAX_PUBLICATION_LAG_MONTHS` = 4 (worst measured lag 3), and the zone lookup still answers. Otherwise `SourceAccessError`: exit 1, `is_published` raises, and the retrain plan fails red. A GET 403 after HEAD 200 used to exit 0; it is now an error too.
+- **Schema contract split out** (`raw_schema.py`): validate/quality/prepare import that, not `ingest.py`, so download-code changes no longer invalidate the pipeline. `dvc.lock` changed only in source-dep hashes (`dvc commit`; no output hash moved).
+- Proof: `uv run pytest tests/test_ingest.py` has 52 tests, 21 new or rewritten. Live on 2026-09-23: `2026-08` → exit 0 "not published (control object reachable)"; `2008-01` → exit 1 "missing, not pending"; `2025-04` → "local md5 verified; skipping download".
