@@ -1,20 +1,29 @@
 """FastAPI app: /predict, /predict/batch, /health, /ready.
 
-Startup loads the model or falls back to the lookup table (never both
-failing silently). Bad input is a 422 with field messages; anything
-unexpected is a 500 with a request_id, logged with a traceback. No input
-yields an unhandled exception.
+Failure policy (ADR-0012, tested in tests/test_serving_failures.py): a model
+that fails to load OR fails at prediction time is replaced by the baseline
+table for that request; when nothing can serve, the process stays up and
+answers 503. Bad input is a 422 with field messages; bodies over
+`max_body_bytes` are a 413 before parsing; anything unexpected is a 500 with a
+request_id, logged with a traceback.
+
+Prediction (pandas + sklearn, CPU-bound) runs on worker threads through a
+CapacityLimiter of `predict_workers` (default 1): the event loop stays free
+for other requests, and predictions do not oversubscribe the cores OpenMP
+already uses. Measured: scripts/bench_concurrency.py, docs/failure_modes.md.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, TypeVar
 
+import anyio
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -23,11 +32,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from tripduration.api.deps import (
     APP_VERSION,
     FIXTURE_REQUEST,
+    Prediction,
     Predictor,
     ServiceUnavailableError,
     Settings,
 )
-from tripduration.api.middleware import RequestContextMiddleware
+from tripduration.api.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+)
 from tripduration.api.models import (
     BatchPredictRequest,
     BatchPredictResponse,
@@ -41,6 +54,7 @@ from tripduration.api.models import (
 from tripduration.logging import configure
 
 log = logging.getLogger("tripduration.api")
+T = TypeVar("T")
 
 
 def _field_name(loc: tuple[Any, ...]) -> str:
@@ -71,7 +85,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="nyc-taxi-trip-duration", version="0.1.0", lifespan=lifespan)
+    # Added first = innermost: the size check runs inside the request context,
+    # so a 413 still has a request id and a `request` log line.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
     app.add_middleware(RequestContextMiddleware)
+
+    batch_limit = settings.max_batch
+    limiter: anyio.CapacityLimiter | None = None
+
+    async def off_loop(fn: Callable[..., T], *args: Any) -> T:
+        """Run CPU-bound work on a worker thread, at most predict_workers at
+        once. Created lazily: a limiter binds to the running event loop."""
+        nonlocal limiter
+        if limiter is None:
+            limiter = anyio.CapacityLimiter(settings.predict_workers)
+        return await anyio.to_thread.run_sync(fn, *args, limiter=limiter)
+
+    class Batch(BatchPredictRequest):
+        max_items: ClassVar[int] = batch_limit
+
+    Batch.__name__ = "BatchPredictRequest"
 
     # --- error handling ----------------------------------------------------------
 
@@ -122,7 +155,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rid = getattr(request.state, "request_id", "-")
         log.error(
             "service unavailable",
-            extra={"event": "unavailable", "path": request.url.path},
+            extra={
+                "event": "unavailable",
+                "path": request.url.path,
+                "detail": str(exc),
+            },
         )
         return JSONResponse(
             status_code=503,
@@ -163,54 +200,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # --- routes ----------------------------------------------------------------
 
+    def _served(request: Request, result: Prediction) -> None:
+        # Carried into the request log line: what actually answered, and the
+        # distribution of what the service predicts, not just its error rate.
+        request.state.model_kind = result.kind
+        request.state.served_version = result.version
+
     @app.post("/predict", response_model=PredictResponse)
     async def predict(body: PredictRequest, request: Request) -> PredictResponse:
         p: Predictor = request.app.state.predictor
         _check_window([body.departure_time])
-        pred = p.predict(
-            [body.pickup_zone_id], [body.dropoff_zone_id], [body.departure_time]
+        result = await off_loop(
+            p.predict,
+            [body.pickup_zone_id],
+            [body.dropoff_zone_id],
+            [body.departure_time],
         )
-        request.state.model_kind = p.kind
-        # Carried into the request log line so the *distribution* of what the
-        # service predicts is observable, not just its error rate.
-        request.state.prediction = round(float(pred[0]), 2)
+        _served(request, result)
+        request.state.prediction = round(float(result.values[0]), 2)
         return PredictResponse(
-            duration_min=round(float(pred[0]), 2),
-            model_version=p.model_version,
-            model_kind=cast(Literal["model", "fallback"], p.kind),
+            duration_min=round(float(result.values[0]), 2),
+            model_version=result.version,
+            model_kind=result.kind,
             fallback_version=p.fallback_version,
             request_id=request.state.request_id,
         )
 
-    @app.post("/predict/batch", response_model=BatchPredictResponse)
-    async def predict_batch(
-        body: BatchPredictRequest, request: Request
-    ) -> BatchPredictResponse:
+    async def predict_batch(body: Batch, request: Request) -> BatchPredictResponse:
         p: Predictor = request.app.state.predictor
-        if len(body.items) > settings.max_batch:
-            raise RequestValidationError(
-                [
-                    {
-                        "loc": ("body", "items"),
-                        "msg": f"at most {settings.max_batch} items",
-                        "type": "value_error",
-                    }
-                ]
-            )
         _check_window([i.departure_time for i in body.items])
-        pred = p.predict(
+        result = await off_loop(
+            p.predict,
             [i.pickup_zone_id for i in body.items],
             [i.dropoff_zone_id for i in body.items],
             [i.departure_time for i in body.items],
         )
-        request.state.model_kind = p.kind
+        _served(request, result)
         return BatchPredictResponse(
-            predictions=[round(float(x), 2) for x in pred],
-            model_version=p.model_version,
-            model_kind=cast(Literal["model", "fallback"], p.kind),
+            predictions=[round(float(x), 2) for x in result.values],
+            model_version=result.version,
+            model_kind=result.kind,
             fallback_version=p.fallback_version,
             request_id=request.state.request_id,
         )
+
+    # `Batch` is local to create_app; with postponed annotations FastAPI would
+    # see the string "Batch" and not resolve it, so give it the class itself.
+    predict_batch.__annotations__["body"] = Batch
+    app.post("/predict/batch", response_model=BatchPredictResponse)(predict_batch)
 
     def _health(p: Predictor) -> HealthResponse:
         return HealthResponse(
@@ -222,6 +259,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             git_sha=p.git_sha,
             load_error=p.load_error,
             fallback_error=p.fallback_error,
+            predict_error=p.predict_error,
+            predict_failures=p.predict_failures,
+            release_error=p.release_error,
+            reference_error=p.reference_error,
+            config_error=p.config_error,
         )
 
     @app.get("/health/live", response_model=LiveResponse)
@@ -234,41 +276,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             uptime_s=round(time.monotonic() - request.app.state.started_at, 3),
         )
 
+    def _not_ready(p: Predictor, rid: str, reason: str) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=ReadyResponse(
+                ready=False,
+                reason=reason,
+                model_version=p.model_version,
+                model_kind=p.kind,
+                request_id=rid,
+            ).model_dump(),
+            headers={"retry-after": "30"},
+        )
+
     @app.get("/health/ready", response_model=ReadyResponse, responses={503: {}})
     async def health_ready(request: Request) -> Any:
-        """503 unless a prediction for a fixed request actually succeeds."""
+        """503 unless the MODEL just answered a fixed request. A baseline
+        answer - at load or at prediction time - is serving, not ready."""
         p: Predictor = request.app.state.predictor
         rid = request.state.request_id
         if not p.ready:
-            return JSONResponse(
-                status_code=503,
-                content=ReadyResponse(
-                    ready=False,
-                    reason=(
-                        f"no model and no fallback: {p.load_error}; {p.fallback_error}"
-                    ),
-                    model_version=p.model_version,
-                    model_kind=p.kind,
-                    request_id=rid,
-                ).model_dump(),
-                headers={"retry-after": "30"},
-            )
+            return _not_ready(p, rid, p.unavailable_reason())
         if p.kind != "model":
-            return JSONResponse(
-                status_code=503,
-                content=ReadyResponse(
-                    ready=False,
-                    reason=f"degraded, serving the fallback: {p.load_error}",
-                    model_version=p.model_version,
-                    model_kind=p.kind,
-                    request_id=rid,
-                ).model_dump(),
-                headers={"retry-after": "30"},
-            )
+            return _not_ready(p, rid, f"degraded, serving the fallback: {p.load_error}")
         try:
             body = PredictRequest(**FIXTURE_REQUEST)
-            pred = p.predict(
-                [body.pickup_zone_id], [body.dropoff_zone_id], [body.departure_time]
+            result = await off_loop(
+                p.predict,
+                [body.pickup_zone_id],
+                [body.dropoff_zone_id],
+                [body.departure_time],
             )
         except Exception as e:
             log.error(
@@ -276,22 +313,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 exc_info=True,
                 extra={"event": "ready_failed"},
             )
-            return JSONResponse(
-                status_code=503,
-                content=ReadyResponse(
-                    ready=False,
-                    reason=f"{type(e).__name__}: {e}",
-                    model_version=p.model_version,
-                    model_kind=p.kind,
-                    request_id=rid,
-                ).model_dump(),
-                headers={"retry-after": "30"},
+            return _not_ready(p, rid, f"{type(e).__name__}: {e}")
+        if result.kind != "model":
+            return _not_ready(
+                p, rid, f"model prediction failed, fallback answered: {p.predict_error}"
             )
         return ReadyResponse(
             ready=True,
             model_version=p.model_version,
             model_kind=p.kind,
-            fixture_duration_min=round(float(pred[0]), 2),
+            fixture_duration_min=round(float(result.values[0]), 2),
             request_id=rid,
         )
 

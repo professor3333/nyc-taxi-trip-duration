@@ -53,6 +53,12 @@ def configure(level: str = "INFO") -> None:
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
-    root.setLevel(level.upper())
+    try:
+        root.setLevel(level.upper())
+    except (ValueError, TypeError):  # a bad LOG_LEVEL must not stop startup
+        root.setLevel(logging.INFO)
+        logging.getLogger(__name__).error(
+            "invalid LOG_LEVEL %r; using INFO", level, extra={"event": "config_invalid"}
+        )
     for noisy in ("uvicorn.access",):  # our middleware logs requests
         logging.getLogger(noisy).disabled = True

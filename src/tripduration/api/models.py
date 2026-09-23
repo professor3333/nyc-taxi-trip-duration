@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, ClassVar, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 NY = ZoneInfo("America/New_York")
 
@@ -60,8 +61,22 @@ class PredictResponse(BaseModel):
 
 
 class BatchPredictRequest(BaseModel):
+    """`create_app` subclasses this with `max_items = settings.max_batch`."""
+
     model_config = ConfigDict(extra="forbid")
+    max_items: ClassVar[int] = 100
     items: list[PredictRequest] = Field(min_length=1)
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def _bounded(cls, v: Any) -> Any:
+        # Runs before any item is validated: an oversized batch costs one
+        # len(), not one Pydantic model per item.
+        if isinstance(v, list) and len(v) > cls.max_items:
+            raise PydanticCustomError(
+                "too_long", "at most {limit} items", {"limit": cls.max_items}
+            )
+        return v
 
 
 class BatchPredictResponse(BaseModel):
@@ -83,6 +98,12 @@ class HealthResponse(BaseModel):
     git_sha: str
     load_error: str | None = None
     fallback_error: str | None = None
+    # ADR-0012: why the service is degraded or unavailable, if it is.
+    predict_error: str | None = None
+    predict_failures: int = 0
+    release_error: str | None = None
+    reference_error: str | None = None
+    config_error: str | None = None
 
 
 class LiveResponse(BaseModel):
