@@ -59,7 +59,9 @@ def main() -> int:
             root / "reports" / "prepare.json",
             tracking_uri=None,
         )
-    # champion.json for the image: version "ci", md5s that match what was just written
+    # champion.json for the image: md5s that match what was just written, and
+    # version 0 - an integer like every registry version (the API rejects any
+    # other type, ADR-0012) but never a real one, since the registry starts at 1.
     import hashlib
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +69,7 @@ def main() -> int:
         json.dumps(
             {
                 "model_name": "ci-fixture",
-                "version": "ci",
+                "version": 0,
                 "model_md5": hashlib.md5(
                     (args.out / "model.pkl").read_bytes()
                 ).hexdigest(),

@@ -185,3 +185,10 @@ Tick a line only when its proof command passes, not when the code is written.
 - `reproduce.yml mode=regenerate` (run 35829309690): every stage in `tripduration-train:10f6058c0294` on a runner (Linux x86_64, glibc 2.41). Outputs pushed to DVC and committed (`5494091`). Metrics identical to the macOS-produced ones, fixture within the old rounding.
 - `mode=verify` (run 35830238679): fresh clone, `--network none`, `--force --no-run-cache`: **80/80 predictions bit-identical, every metric identical**.
 - Negative control (run 35831123575, `d162ffc` with rounded macOS results): 137 differences reported, but the run concluded success. That is the `bash -e` / no-pipefail defect fixed in PR #55.
+
+## Serving failure policy — 2026-09-23 (ADR-0012)
+
+- Reproduced first, as 27 tests in `tests/test_serving_failures.py` (26 failed on `main`). A model that loads but fails in `predict()` (raises, NaN/inf, wrong shape, non-numeric) now answers **that request from the baseline** (logged at ERROR, `model_kind=fallback`, `/health` degraded until the model answers again). The baseline failing too gives a controlled 503.
+- Corrupt `champion.json`: the model serves, labelled `unregistered`, `/health` degraded. Missing or corrupt reference data, or unusable `params.yaml`/`LOG_LEVEL`: the process stays up and answers 503 (before, all of these prevented startup).
+- Bodies over 32 KiB get a 413 before JSON parsing, enforced on bytes received (chunked and false Content-Length included). Batch length is checked before item validation.
+- Prediction runs off the event loop through a CapacityLimiter (`predict_workers=1`). Measured with `scripts/bench_concurrency.py`: `/health/live` p95 under batch load 36 → 6 ms; single-client throughput unchanged; concurrency-8 throughput −24% (the plain thread pool was −53%, from OpenMP/GIL oversubscription).

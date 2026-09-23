@@ -5,8 +5,8 @@ ADR-0008) or `http://localhost:8080` under Compose.
 
 | Endpoint | Purpose | Codes |
 |---|---|---|
-| `POST /predict` | duration in minutes, the model version, and which predictor answered | 200, 422, 503 |
-| `POST /predict/batch` | the same for up to `api.max_batch` requests | 200, 422, 503 |
+| `POST /predict` | duration in minutes, the model version, and which predictor answered | 200, 413, 422, 503 |
+| `POST /predict/batch` | the same for up to `api.max_batch` requests | 200, 413, 422, 503 |
 | `GET /health/live` | the process is running — nothing about the model | 200 |
 | `GET /health/ready` | a prediction for a fixed request actually succeeded | 200, 503 |
 | `GET /version` | deployed model **and** application versions | 200 |
@@ -85,6 +85,16 @@ the request is wrong regardless of what could have served it.
 | model loaded | 200 | 200 | 200 `model_kind: model` | `ok` |
 | model missing, corrupt, or feature-list mismatch | 200 | **503** | 200 `model_kind: fallback` | `degraded` |
 | model **and** fallback unloadable | 200 | **503** | **503** `{"error": "unavailable"}` | `unavailable` |
+| model loaded, but its prediction fails for this request (raises, NaN/inf, wrong shape) | 200 | **503** until it answers again | 200 `model_kind: fallback` for that request | `degraded` (`predict_error`) |
+| baseline also fails at prediction time | 200 | 503 | **503** | as above |
+| `champion.json` unreadable | 200 | 200 | 200, `model_version: unregistered:<sha>` | `degraded` (`release_error`) |
+| reference data or config unusable | 200 | **503** | **503** | `unavailable` (`reference_error` / `config_error`) |
+
+Full policy and the reasoning behind it: ADR-0012. Request bodies over
+`api.max_body_bytes` (32 KiB) are refused with **413** before JSON parsing,
+and a batch over `api.max_batch` is a 422 on `items` before any item is
+validated. Predictions run off the event loop, one at a time by default
+(`api.predict_workers`), so probes answer during a slow prediction.
 
 `/health/live` stays 200 in every state on purpose: restarting a process that
 cannot load its artefacts does not fix it, and a liveness probe that kills it
