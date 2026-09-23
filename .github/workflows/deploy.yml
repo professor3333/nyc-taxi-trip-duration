@@ -23,6 +23,13 @@ permissions:
   contents: read
   id-token: write   # OIDC -> AWS_ROLE_ARN, no long-lived keys
 
+# Explicit `shell: bash` runs steps with `-eo pipefail`. The implicit default
+# is `bash -e`, where `cmd | tee log` reports tee's status and a failing cmd
+# passes (tests/test_workflows.py).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
