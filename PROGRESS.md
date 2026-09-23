@@ -179,3 +179,9 @@ Tick a line only when its proof command passes, not when the code is written.
 - **Canonical training environment:** Dockerfile `train` target on the serving image's digest-pinned base (Python 3.12.14, Debian 13, glibc 2.41), linux/amd64. `scripts/train_env.sh` runs it; `make pipeline`, `make reproduce` (no network) and `retrain.yml` (repro + prospective eval) use it. CI runs the fixture pipeline in it.
 - **Architecture investigation (bit level):** only `centroid_dist_km` (`np.hypot`) differs between macOS libm and glibc (20/80 fixture rows, 1 ulp). `predict` on identical feature bits is identical across architectures (0/80). The old "every row differs" included the API's 2-dp rounding.
 - The full window does not fit this laptop's 3.9 GiB Docker VM (prepare OOM, exit 137), so the canonical regeneration and verification run on a runner: `.github/workflows/reproduce.yml` (`mode=regenerate` / `mode=verify`).
+
+## Canonical outputs regenerated and verified — 2026-09-23 (PR B)
+
+- `reproduce.yml mode=regenerate` (run 35829309690): every stage in `tripduration-train:10f6058c0294` on a runner (Linux x86_64, glibc 2.41). Outputs pushed to DVC and committed (`5494091`). Metrics identical to the macOS-produced ones, fixture within the old rounding.
+- `mode=verify` (run 35830238679): fresh clone, `--network none`, `--force --no-run-cache`: **80/80 predictions bit-identical, every metric identical**.
+- Negative control (run 35831123575, `d162ffc` with rounded macOS results): 161 differences reported, but the run concluded success. That is the `bash -e` / no-pipefail defect fixed in PR #55.

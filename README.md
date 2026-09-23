@@ -36,7 +36,7 @@ Full diagram and the real-vs-scripted table: [`docs/architecture.md`](docs/archi
 |---|---|
 | **Data** | 2024-10 … 2025-01 yellow months (14.6M rows) as immutable copies under DVC; per-month provenance reports; schema-drift detection at ingest |
 | **Pipeline** | `dvc repro`: validate (ADR-0002 rules with per-rule counts) → prepare (ADR-0003 rolling split, ADR-0005 features, post-trip columns dropped) → train (HGBR + fallback table, MLflow run) → evaluate (MAE/MAPE/RMSE/P90 for model and fallback; by hour and borough pair) |
-| **Result** | champion v3: test MAE **3.79 min** on 2025-01 vs fallback 3.99; reproduced from a clean clone at 1e-9 |
+| **Result** | serving champion v3: test MAE **3.79 min** on 2025-01 vs fallback 3.99 (trained on macOS arm64, before the canonical environment). The committed pipeline outputs (test 2025-04: model 3.51, fallback 3.88) reproduce bit-for-bit from a clean clone in the canonical training environment (`reproduce.yml` run 35830238679) |
 | **Registry** | MLflow on Compose; `make register` / `make promote` / `make rollback` with a gate (same-month or prospective MAE, beats fallback); `docs/promotions.md` |
 | **Serving** | FastAPI in a 900 MB `python:3.12-slim` image with the Lambda Web Adapter; fallback when the model cannot load; 422 with field messages for every bad input; one JSON log line per request |
 | **CI** | lint, mypy, 104 tests (fuzz, parity, reproducibility), docker build, container smoke; branch protection blocks a red PR (PR #12) |

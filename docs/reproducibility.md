@@ -80,29 +80,38 @@ restoring a cached model is not reproducing training.
   raw md5s are in `reports/ingest/` to check against.
 - Roughly 4 GB of RAM and 5 minutes.
 
-## Transcript (2026-09-22, commit `ab70bd93`)
+## Transcript (2026-09-23, commit `5494091`, `reproduce.yml` run 35830238679)
+
+The first run under the current rules. It ran on a GitHub runner (native
+linux/amd64, 16 GB); the full window does not fit a 3.9 GiB Docker VM.
 
 ```
-== clone ab70bd93799066e91b2cac0a6d106aecd5a6781c into /var/folders/.../reproduce.aX4NQzO2g2
-== uv sync --frozen --group train
-== dvc pull
-== dvc repro (MLflow -> sqlite in the temp dir)
-  validated 2024-10: in=3833771 out=3692603 rejected={...}
-  2024-10: PASS — 3692603/3833771 rows valid (3.68% rejected), median 13.867 min
-  2024-11: PASS — 3503006/3646369 rows valid (3.93% rejected), median 13.4 min
-  2024-12: PASS — 3532547/3668371 rows valid (3.70% rejected), median 13.8 min
-  2025-01: PASS — 3361429/3475226 rows valid (3.27% rejected), median 11.7 min
-  training on 7195609 rows, months=['2024-10', '2024-11']
-  model fit in 139.7s; fallback cells={'pair_hour': 40244, 'pair': 19196, ...}
-real	4m46.001s
-== dvc metrics diff (committed vs reproduced)
-  (no rows: nothing changed)
-== predictions, tolerance 1e-09 min
+== clone 5494091247db474a9a23ec7a67c2c95f705cfdb7 into /tmp/reproduce.X6fUt7
+== dvc pull (host: needs the remote's credentials)
+== dvc repro in the canonical training environment, no network
+[train_env] tripduration-train:10f6058c0294 (sha256:3fb3785f…)
+   repro took 8 min
+== predictions vs 5494091247db, tolerance 0.0 min
    80 predictions compared, largest difference 0.000e+00 min
-== metrics, tolerance 1e-09
+== metrics vs 5494091247db, tolerance 0.0
    every metric identical within tolerance
-== reproduce OK for ab70bd93799066e91b2cac0a6d106aecd5a6781c
+== reproduce OK for 5494091247db474a9a23ec7a67c2c95f705cfdb7
 ```
+
+**Negative control (run 35831123575):** `verify` on `d162ffc`, whose
+committed results were the old 6-dp-rounded, macOS-produced files. The
+comparator reported 161 differences (largest 4.9e-7 min: the rounding the
+old 1e-9 check could not see). **The run still concluded `success`**: steps
+ran as `bash -e` without `pipefail`, so `make reproduce | tee` passed.
+Every workflow now sets `shell: bash` (PR #55, `tests/test_workflows.py`).
+
+Image ids differ between builds of the same key (the runner's build and a
+local build of `tripduration-train:10f6058c0294` have different ids), because
+apt and file timestamps vary. What determines the computation is fixed: the
+base image digest and `uv.lock`, which are what the key hashes.
+
+The 2026-09-22 transcript (commit `ab70bd93`, "1e-9") used the old checks:
+rounded predictions, expected results from a working tree, native macOS.
 
 ## Architecture sensitivity — cause identified
 
