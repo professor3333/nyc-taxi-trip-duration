@@ -522,3 +522,15 @@ def test_ingest_zones_rejects_unexpected_header(
             sleep=NO_SLEEP,
         )
     assert not (tmp_path / "data" / "reference" / "taxi_zone_lookup.csv").exists()
+
+
+def test_is_published_is_head_only(schema: RawSchema, tmp_path: Path) -> None:
+    """The retrain planner's check: one HEAD, no GET, nothing written."""
+    server = FakeServer(b"parquet bytes")
+    assert ingest.is_published(
+        "yellow", "2025-03", schema, opener=server, sleep=NO_SLEEP
+    )
+    assert server.calls == ["HEAD"]
+    assert not ingest.is_published(
+        "yellow", "2099-01", schema, opener=_server_failing(403), sleep=NO_SLEEP
+    )
