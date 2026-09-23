@@ -139,7 +139,8 @@ class VersionResponse(BaseModel):
     feature_count: int
     loaded_at: str
     # Which execution environment answered, and how many requests it had
-    # served before this one: 0 proves this request met a fresh process.
+    # served before this one (not counting the Web Adapter's readiness polls
+    # of AWS_LWA_READINESS_CHECK_PATH): 0 means this request met a fresh process.
     instance_id: str
     process_started_at: str
     requests_before: int

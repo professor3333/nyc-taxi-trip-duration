@@ -129,6 +129,37 @@ function's resource policy may grant them.
 non-root Actions role). A failure in only the second isolates the URL edge or
 its auth. The transcript prints the signing principal.
 
+## Amendment, 2026-09-23 — what the "≈ 24 s init" actually is
+
+The first cold start measured by the new `deploy_check --cold` (deploy run
+35865460403, image `62fb31f`) read its execution environment's log stream:
+
+```
+lambda_web_adapter: app is not ready after 8000ms url=…/health/live
+INIT_REPORT Init Duration: 9999.56 ms  Phase: init  Status: timeout
+INFO: Started server process [5]          ← init redone inside the invoke
+… Application startup complete             (+3.8 s)
+START RequestId: ca70bee3…
+REPORT … Duration: 5545.81 ms              (no Init Duration field)
+```
+
+So a cold start is not one slow init: the **init phase hits Lambda's 10 s
+limit**, Lambda abandons it, and the whole init runs again inside the first
+invocation (billed, under the 60 s function timeout). The request took 16 s
+end to end. The second attempt took 3.8 s once the image layers were local.
+The "≈ 24 s" measured on 2026-09-22 was the same thing: 10 s of timed-out
+init plus the retry. Consequences:
+
+- `Init Duration` is absent from REPORT for these cold starts, so it cannot
+  be the proof of one; `deploy_check --cold` uses "first `START` in its
+  environment's stream" instead, and records the `INIT_REPORT` status.
+- The `InitFailures` alarm (`Status: timeout`) fires on every cold start
+  until init fits in 10 s. That is deliberate: every cold start currently
+  wastes 10 s.
+- Not fixed here. Candidates, in order of cost: load the model lazily on the
+  first request instead of at startup; slim the image (fewer layers to
+  fetch); SnapStart does not apply to container images.
+
 ## Consequences
 
 - The 900 MB image is the main cold-start cost; slimming (no pyarrow at

@@ -14,12 +14,16 @@
         --publish-metrics monitor                          # end-to-end latency
 
 --cold measures the FIRST request of the run and fails unless it is provably
-cold: the app reports it was the first request its process served
-(``/version`` ``requests_before == 0``) and Lambda's REPORT line for that
-request carries an ``Init Duration`` (from the invoke log tail, or looked up
-in CloudWatch Logs by request id for a URL call). It then enforces
---cold-max-ms end to end. --force-new-environment changes an environment
-variable first, so no warm environment can answer, and restores it after.
+cold. The app must report that this was the first request its process served
+(``/version`` ``requests_before == 0``; the Web Adapter's readiness polls do
+not count). The platform must agree: in the CloudWatch log stream of the
+execution environment that served it, this request's ``START`` is the first
+one. The init evidence (``INIT_REPORT`` status, init duration) is recorded.
+Lambda omits ``Init Duration`` from REPORT when init hit its 10 s limit and was
+redone inside the invoke, which is what this service did on 2026-09-23, so the
+stream, not that field, is the proof. Then --cold-max-ms is enforced end to
+end. --force-new-environment changes an environment variable first, so no
+warm environment can answer, and restores it after.
 
 Default checks: /health is ok (or --allow-degraded), /ready is 200, the
 fixture prediction matches --expect-duration (or the offline value computed
@@ -290,27 +294,82 @@ def first_request(base: str, sign: bool, function: str | None) -> dict[str, Any]
     }
 
 
-def find_report(
+def environment_evidence(lines: list[str], request_id: str) -> dict[str, Any]:
+    """From one execution environment's log stream (oldest first): was this
+    request its first invocation, and how did its init go?"""
+    starts_before = 0
+    init_report = None
+    report = None
+    for line in lines:
+        if line.startswith("INIT_REPORT") and init_report is None:
+            init_report = line.strip()
+        elif line.startswith("START RequestId:"):
+            if request_id in line:
+                break
+            starts_before += 1
+    for line in lines:
+        if line.startswith(f"REPORT RequestId: {request_id}"):
+            report = parse_report(line)
+    init_ms = (report or {}).get("init_duration_ms")
+    status = "not reported"
+    if init_report:
+        fields = dict(
+            part.strip().split(": ", 1)
+            for part in init_report.split("\t")
+            if ": " in part
+        )
+        status = fields.get("Status", "success")
+        if init_ms is None and "INIT_REPORT Init Duration" in fields:
+            init_ms = float(fields["INIT_REPORT Init Duration"].removesuffix(" ms"))
+    elif init_ms is not None:
+        status = "success"
+    return {
+        "first_invoke_in_environment": starts_before == 0,
+        "invokes_before": starts_before,
+        "init_report": init_report,
+        "init_status": status,
+        "init_duration_ms": init_ms,
+        "report": report,
+    }
+
+
+def find_environment(
     log_group: str, request_id: str, start_ms: int, wait_s: float = 120
-) -> dict[str, Any] | None:
-    """Look up the REPORT line of one invocation in CloudWatch Logs."""
+) -> dict[str, Any]:
+    """Find the invocation in CloudWatch Logs, then read its execution
+    environment's stream from the beginning (one stream per environment)."""
     import boto3
 
     logs = boto3.client("logs")
     deadline = time.monotonic() + wait_s
-    while True:
+    stream = None
+    while stream is None:
         resp = logs.filter_log_events(
             logGroupName=log_group,
-            startTime=start_ms - 60_000,
+            startTime=start_ms - 600_000,
             filterPattern=f'"REPORT RequestId: {request_id}"',
         )
-        for ev in resp.get("events", []):
-            rep = parse_report(ev["message"])
-            if rep is not None:
-                return rep
-        if time.monotonic() > deadline:
-            return None
-        time.sleep(5)
+        events = resp.get("events", [])
+        if events:
+            stream = events[0]["logStreamName"]
+        elif time.monotonic() > deadline:
+            return {"error": f"no REPORT for {request_id} in {log_group}"}
+        else:
+            time.sleep(5)
+    lines: list[str] = []
+    token = None
+    while True:
+        kw: dict[str, Any] = {"nextToken": token} if token else {}
+        page = logs.get_log_events(
+            logGroupName=log_group, logStreamName=stream, startFromHead=True, **kw
+        )
+        lines += [e["message"] for e in page["events"]]
+        if any(line.startswith(f"REPORT RequestId: {request_id}") for line in lines):
+            break
+        if page["nextForwardToken"] == token or not page["events"]:
+            break
+        token = page["nextForwardToken"]
+    return {"stream": stream, **environment_evidence(lines, request_id)}
 
 
 def publish(probe: str, metrics: dict[str, list[float]], namespace: str) -> str:
@@ -479,14 +538,6 @@ def main() -> int:
             if restore is not None:
                 restore_environment(fn or args.function, restore)
         body = first["body"] if isinstance(first["body"], dict) else {}
-        report = first["report"]
-        if report is None and first["path"] == "url" and args.function:
-            report = find_report(
-                f"/aws/lambda/{args.function}",
-                first["request_id"] or "",
-                first["started_epoch_ms"],
-            )
-        first["report"] = report
         evidence["cold"] = first
         check(
             "cold: fresh process",
@@ -495,17 +546,41 @@ def main() -> int:
             f"requests_before={body.get('requests_before')} "
             f"started {body.get('process_started_at')}",
         )
-        platform = (report or {}).get("init_duration_ms")
-        if first["path"] == "url" and not args.function:
-            print(
-                "SKIP  cold: platform init (no --function to look up the REPORT line)"
-            )
+        target_fn = fn or args.function
+        platform: Any = None
+        if not target_fn:
+            print("SKIP  cold: platform (no --function to find its log stream)")
         else:
-            check(
-                "cold: platform init observed",
-                platform is not None,
-                (report or {}).get("line", f"no REPORT for {first['request_id']}"),
-            )
+            from botocore.exceptions import ClientError
+
+            try:
+                env = find_environment(
+                    f"/aws/lambda/{target_fn}",
+                    first["request_id"] or "",
+                    first.get("started_epoch_ms", int(time.time() * 1000)),
+                )
+            except ClientError as e:
+                code = e.response["Error"]["Code"]
+                print(
+                    f"::warning::cold: platform evidence unreadable ({code}); "
+                    "the deploy role gains logs read with the ADR-0013 migration"
+                )
+                print(f"SKIP  cold: platform ({code})")
+            else:
+                first["environment"] = env
+                platform = env.get("init_duration_ms")
+                check(
+                    "cold: first invocation of its execution environment",
+                    env.get("first_invoke_in_environment") is True,
+                    env.get("error")
+                    or f"stream {env['stream']}: {env['invokes_before']} invokes "
+                    f"before; init {env['init_status']} {env['init_duration_ms']} ms",
+                )
+                if env.get("init_status") not in ("success", "not reported", None):
+                    print(
+                        f"::warning::cold start init did not finish in the init "
+                        f"phase: {env['init_report']}"
+                    )
         check(
             f"cold: end to end <= {args.cold_max_ms:.0f} ms",
             first["e2e_ms"] <= args.cold_max_ms,
@@ -514,7 +589,7 @@ def main() -> int:
         )
         cold_ms.append(first["e2e_ms"])
         if platform is not None:
-            init_ms.append(platform)
+            init_ms.append(float(platform))
 
     status, live, ms = call(f"{base}/health/live", sigv4=sign, function=fn)
     check("health/live", status == 200, f"HTTP {status} in {ms:.0f} ms {_short(live)}")

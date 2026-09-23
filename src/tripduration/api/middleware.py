@@ -29,7 +29,10 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request.state.request_id = rid
         state = request.app.state
         index = getattr(state, "requests_seen", 0)
-        state.requests_seen = index + 1
+        settings = getattr(state, "settings", None)
+        probe = getattr(settings, "readiness_probe_path", None)
+        if request.url.path != probe:  # the adapter's own readiness polls
+            state.requests_seen = index + 1
         request.state.process_request_index = index
         t0 = time.perf_counter()
         try:

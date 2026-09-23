@@ -530,6 +530,23 @@ def test_batch_request_logs_a_prediction_summary(model_dir: Path) -> None:
     assert batch["process_request_index"] == 0 and single["process_request_index"] == 1
 
 
+def test_adapter_readiness_polls_do_not_count_as_requests(model_dir: Path) -> None:
+    """Observed live 2026-09-23: the Web Adapter polls /health/live before the
+    first invocation, which made a genuine first request report 1."""
+    settings = replace(_settings(model_dir), readiness_probe_path="/health/live")
+    with TestClient(create_app(settings)) as c:
+        c.get("/health/live")
+        c.get("/health/live")
+        first = c.get("/version").json()
+    assert first["requests_before"] == 0
+
+
+def test_readiness_path_is_read_from_the_adapter_env() -> None:
+    s = Settings.load({"AWS_LWA_READINESS_CHECK_PATH": "/health/live"})
+    assert s.readiness_probe_path == "/health/live"
+    assert Settings.load({}).readiness_probe_path is None
+
+
 # --- parity (G7) ----------------------------------------------------------------------
 
 

@@ -237,5 +237,6 @@ Tick a line only when its proof command passes, not when the code is written.
   - outside-in: `E2ELatencyMs` and `ColdStartE2EMs` from `deploy_check`;
   - `BatchPredictionMedianHigh` for batches;
   - value metrics no longer default to 0.
+- **First live cold-start proof found a real defect** (deploy run 35865460403). Init hits Lambda's 10 s limit (`INIT_REPORT … Status: timeout`), and Lambda redoes init inside the first request: 16 s end to end, REPORT without `Init Duration`. The "≈ 24 s init" in ADR-0008 was this. The app also counted the Web Adapter's readiness polls as requests. Both proofs were reworked: readiness polls are excluded, and the platform proof is now "first `START` in the environment's log stream", tested on the observed stream. The init time itself is not fixed yet (ADR-0008 lists the candidates).
 - **Freshness** (`scripts/freshness.py`, daily): red today on data (17 months) and model (22 months); retrain green (0.4 days).
 - **Alert delivery:** the only SNS subscription is still `PendingConfirmation`, so no alarm has ever reached anyone. `alarm_drill.py` (real ERROR line → alarm → email → OK → email) refuses to run until the owner confirms the email.
