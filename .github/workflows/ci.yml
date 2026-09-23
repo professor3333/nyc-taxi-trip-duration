@@ -12,6 +12,13 @@ concurrency:
 permissions:
   contents: read
 
+# Explicit `shell: bash` runs steps with `-eo pipefail`. The implicit default
+# is `bash -e`, where `cmd | tee log` reports tee's status and a failing cmd
+# passes (tests/test_workflows.py).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ci:
     runs-on: ubuntu-latest

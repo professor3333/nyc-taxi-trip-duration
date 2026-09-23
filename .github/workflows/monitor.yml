@@ -14,6 +14,13 @@ permissions:
   issues: write
   id-token: write   # the Function URL uses AWS_IAM auth (ADR-0008 amendment)
 
+# Explicit `shell: bash` runs steps with `-eo pipefail`. The implicit default
+# is `bash -e`, where `cmd | tee log` reports tee's status and a failing cmd
+# passes (tests/test_workflows.py).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
