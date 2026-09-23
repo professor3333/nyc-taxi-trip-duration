@@ -61,7 +61,7 @@ previous candidate, so rejecting a model blocked all later data.
   data and pipeline outputs; serving changes only through `champion.json`
   (ADR-0007). A model-rejected candidate should still be merged if its data is
   sound. A PR opened by `GITHUB_TOKEN` gets its `pull_request` `ci` run held
-  at `action_required`; approving it (`make approve-ci BRANCH=retrain/<M>`) is
+  at `action_required`; approving it (`make candidate-ci BRANCH=retrain/<M>`) is
   part of the human's data-acceptance step. (Tried and rejected: dispatching
   `ci.yml` on the branch. The run passes on the right commit, but its check
   suite is not linked to the PR, so branch protection still says BLOCKED.)
@@ -79,3 +79,37 @@ pending: only one pending run per concurrency group.
 **Consequences.** A later candidate can carry earlier months: merge the newest
 and close the older PRs it names. If an older one is merged first, the newer
 one conflicts on `dvc.lock`/metrics; dispatch it with `rebuild=true`.
+
+## Amendment 2026-09-23 (b): the candidate PR's CI path is part of the workflow
+
+**Context.** A successful retrain that opens a PR is only half the workflow:
+the candidate must pass branch protection's required check (`ci`) to be
+merged. PR #24's head commit had **zero** check runs; its only `pull_request`
+run (35736104171) failed and nothing surfaced it. GitHub requires approval
+before running workflows on PR events created with `GITHUB_TOKEN`, so an
+automated PR cannot be assumed to receive ordinary CI.
+
+**Options.**
+
+| | Human approves the held run | GitHub App installation token |
+|---|---|---|
+| CI starts | after `make candidate-ci` | immediately |
+| Setup | none | create + install an App (browser), store its private key as a secret, `actions/create-github-app-token` step |
+| New secret | none | a long-lived private key that can push and open PRs |
+| Fits ADR-0010 | yes — accepting data is already a human step | only if data acceptance becomes unattended |
+
+**Decision.** Keep `GITHUB_TOKEN` and make the approval explicit and
+verified. Data acceptance is a human decision anyway, so the approval costs no
+extra step, and it avoids storing a private key that could push to the repo.
+If retraining ever becomes unattended end to end (auto-merge of data), switch
+to an App token scoped to `contents` + `pull-requests` on this repo only.
+
+- `retrain.yml`'s last step finds the `pull_request` `ci` run on the PR's
+  **head commit**, comments its URL and state on the PR, and **fails the job**
+  if none appears within two minutes (e.g. a `GITHUB_TOKEN` force-push that
+  GitHub does not run workflows for).
+- `make candidate-ci BRANCH=retrain/<M>` (`scripts/candidate_ci.sh`) approves
+  the held run, waits for it, then asserts every context in `main`'s required
+  status checks succeeded on the head commit **and** GitHub reports the PR
+  `CLEAN`. It exits non-zero otherwise. That output is the proof attached to
+  the PR before merging.

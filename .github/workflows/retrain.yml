@@ -117,6 +117,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      actions: read    # find the candidate PR's ci run
     env:
       MLFLOW_TRACKING_URI: sqlite:///ci-mlflow.db   # throwaway; the real registry is local (ADR-0004)
       MLFLOW_DISABLE_AGENT_HINT: "1"
@@ -197,6 +198,7 @@ jobs:
           fi
 
       - name: Open or update the candidate PR
+        id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           LABEL: ${{ steps.gate.outputs.label }}
@@ -214,7 +216,7 @@ jobs:
               echo; echo "Carries unmerged accepted data: $CARRY (from open PR(s) $(for n in $CARRY_PRS; do printf '#%s ' "$n"; done))."
             fi
             echo; echo "### Two separate decisions"
-            echo "- **Accept the data:** approve the held \`ci\` run (\`make approve-ci BRANCH=retrain/$M\`), then merge this PR. It updates main's data and pipeline outputs; it never changes what is served."
+            echo "- **Accept the data:** approve the held \`ci\` run (\`make candidate-ci BRANCH=retrain/$M\`), then merge this PR. It updates main's data and pipeline outputs; it never changes what is served."
             echo "- **Promote the model:** \`make register\` then \`make promote VERSION=<n> REASON=...\` (ADR-0010). To decline, label \`model-rejected\` and merge anyway if the data is sound."
             echo "- Label \`data-rejected\` only if this month's data is wrong: later months then wait for it."
             echo; echo "### Candidate vs fallback"; echo
@@ -249,7 +251,41 @@ jobs:
           for n in $CARRY_PRS; do
             gh pr comment "$n" --body "This PR's data is carried into #$PR ($M). Merging #$PR accepts it too; this PR's model decision is unaffected. Close this PR once #$PR is merged."
           done
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
           { echo "### Candidate $M: #$PR ${LABEL#candidate-}"; cat gate.txt; } >> "$GITHUB_STEP_SUMMARY"
+
+      # A candidate is only useful if it can pass branch protection. GitHub
+      # creates the pull_request `ci` run for a GITHUB_TOKEN-opened PR but holds
+      # it for approval; a force-pushed rebuild may get no run at all. Find the
+      # run on the PR's head commit and say exactly what the human must do - or
+      # fail, so a candidate with no CI path is red here, not discovered later.
+      - name: Locate the candidate PR's required CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.pr }}
+        run: |
+          SHA=$(gh api "repos/{owner}/{repo}/pulls/$PR" -q .head.sha)
+          RUN=""
+          for _ in $(seq 1 12); do
+            RUN=$(gh api "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?head_sha=$SHA&event=pull_request" \
+                    -q '.workflow_runs[0] | select(. != null) | "\(.id) \(.status) \(.conclusion) \(.html_url)"')
+            [ -n "$RUN" ] && break
+            sleep 10
+          done
+          if [ -z "$RUN" ]; then
+            MSG="No \`ci\` run exists for this PR's head \`$SHA\`, so its required check can never pass. Run \`gh api -X PUT repos/{owner}/{repo}/pulls/$PR/update-branch\` or push an empty commit as a human, then \`make candidate-ci BRANCH=retrain/$M\`."
+            gh pr comment "$PR" --body "$MSG"
+            echo "::error::$MSG"
+            exit 1
+          fi
+          read -r _ STATUS CONCLUSION URL <<< "$RUN"
+          if [ "$CONCLUSION" = "action_required" ]; then
+            MSG="Required check \`ci\` for \`$SHA\`: run $URL is **held for approval** (GitHub requires it for PRs opened by \`GITHUB_TOKEN\`). Approving is the data-acceptance step: \`make candidate-ci BRANCH=retrain/$M\` approves, waits, and asserts the PR is CLEAN."
+          else
+            MSG="Required check \`ci\` for \`$SHA\`: run $URL is $STATUS ${CONCLUSION}."
+          fi
+          gh pr comment "$PR" --body "$MSG"
+          echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open or update the model-drift issue
         if: steps.prospective.outputs.verdict == 'degraded'

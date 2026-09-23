@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback approve-ci registry-status serve docker-build docker-build-champion docker-run
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -56,9 +56,8 @@ promote:      ## Promote a version: make promote VERSION=2 REASON="beats v1 on 2
 rollback:     ## Roll champion back to previous_version: make rollback REASON="deploy_check failed"
 	uv run python scripts/promote.py --rollback --reason "$(REASON)"
 
-approve-ci:   ## Run CI on a bot-opened candidate PR (held at action_required): make approve-ci BRANCH=retrain/2025-03
-	@for id in $$(gh run list --workflow ci.yml --branch $(BRANCH) --event pull_request --status action_required --json databaseId -q '.[].databaseId'); do \
-	  gh api -X POST "repos/{owner}/{repo}/actions/runs/$$id/approve" --silent && echo "approved ci run $$id"; done
+candidate-ci: ## Approve a candidate PR's held CI run, wait, assert required checks + CLEAN: make candidate-ci BRANCH=retrain/2025-04
+	scripts/candidate_ci.sh $(BRANCH) --approve
 
 registry-status: ## Aliases, versions and champion.json side by side
 	uv run python scripts/promote.py --status
