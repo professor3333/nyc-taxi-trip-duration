@@ -46,6 +46,9 @@ defaults:
 jobs:
   reproduce:
     runs-on: ubuntu-latest
+    # Runs on branches with DVC write access, so the environment requires the
+    # owner's approval; its subject is the only one the reproduce role trusts.
+    environment: reproduce
     timeout-minutes: 90
     permissions:
       contents: write    # regenerate commits the results to the branch
@@ -69,7 +72,7 @@ jobs:
       - run: make setup
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_REPRODUCE_ROLE_ARN || secrets.AWS_ROLE_ARN }}   # fallback: legacy role until iam.sh migration (runbook)
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Regenerate every stage in the canonical training environment

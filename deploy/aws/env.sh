@@ -12,7 +12,11 @@ export S3_BUCKET="${S3_BUCKET:-${PROJECT}-${ACCOUNT_ID}}"
 export ECR_REPOSITORY="${ECR_REPOSITORY:-${PROJECT}}"
 export LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-${PROJECT}}"
 export LAMBDA_ROLE_NAME="${LAMBDA_ROLE_NAME:-${PROJECT}-lambda-exec}"
-export GH_OIDC_ROLE_NAME="${GH_OIDC_ROLE_NAME:-${PROJECT}-github-actions}"
+export GH_OIDC_ROLE_NAME="${GH_OIDC_ROLE_NAME:-${PROJECT}-github-actions}"   # legacy single role
+export GHA_DEPLOY_ROLE="${PROJECT}-gha-deploy"
+export GHA_RETRAIN_ROLE="${PROJECT}-gha-retrain"
+export GHA_REPRODUCE_ROLE="${PROJECT}-gha-reproduce"
+export GHA_MONITOR_ROLE="${PROJECT}-gha-monitor"
 export GITHUB_REPO="${GITHUB_REPO:-professor3333/nyc-taxi-trip-duration}"
 # GitHub now puts numeric ids in the OIDC `sub` claim:
 #   repo:<owner>@<owner_id>/<name>@<repo_id>:environment:production

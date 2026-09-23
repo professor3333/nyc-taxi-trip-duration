@@ -71,6 +71,13 @@ every CI training run in a SQLite file deleted with its runner.
   `register.py` logs that record into the registration run and tags the
   version with its path, sha256 and origin, but only when its `run_id` equals
   the one in `model_meta.json`.
+- **Laptop only, enforced:** Compose publishes MLflow and the API on
+  `127.0.0.1` (`MLFLOW_BIND` / `API_BIND`). Before 2026-09-23 they were bound
+  on `0.0.0.0`, which put an unauthenticated registry on the LAN. Verified:
+  loopback 200, LAN address refused, and the training container still
+  reaches it via `host.docker.internal` (Docker Desktop). On a Linux host a
+  loopback-only port is not reachable through `host-gateway`: set
+  `MLFLOW_BIND` to the docker bridge address there.
 - **Not automated:** backups are an owner action, like registering. Nothing
   schedules them, because the registry only changes when the owner runs
   something.

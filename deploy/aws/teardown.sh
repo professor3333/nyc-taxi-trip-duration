@@ -22,7 +22,11 @@ fi
 aws iam detach-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole 2>/dev/null || true
 aws iam delete-role --role-name "$LAMBDA_ROLE_NAME" 2>/dev/null && log "deleted lambda role" || true
 aws iam delete-role-policy --role-name "$GH_OIDC_ROLE_NAME" --policy-name "${PROJECT}-deploy" 2>/dev/null || true
-aws iam delete-role --role-name "$GH_OIDC_ROLE_NAME" 2>/dev/null && log "deleted github role" || true
+aws iam delete-role --role-name "$GH_OIDC_ROLE_NAME" 2>/dev/null && log "deleted legacy github role" || true
+for r in "$GHA_DEPLOY_ROLE" "$GHA_RETRAIN_ROLE" "$GHA_REPRODUCE_ROLE" "$GHA_MONITOR_ROLE"; do
+  aws iam delete-role-policy --role-name "$r" --policy-name "$r" 2>/dev/null || true
+  aws iam delete-role --role-name "$r" 2>/dev/null && log "deleted role $r" || true
+done
 if [ "${KEEP_BUDGET:-true}" != "true" ]; then
   aws budgets delete-budget --account-id "$ACCOUNT_ID" --budget-name "${PROJECT}-monthly" && log "deleted budget" || true
 fi

@@ -19,7 +19,7 @@ uv run python scripts/deploy_check.py --url http://localhost:8082 --expect-versi
 
 1. `deploy/aws/budget.sh` first, then `s3.sh`, `ecr.sh`, `iam.sh` (see `deploy/README.md`).
 2. Switch DVC to S3: `uv run dvc remote add -d s3 s3://<bucket>/dvc`, commit `.dvc/config`, `uv run dvc push`.
-3. Set repo secrets `AWS_ROLE_ARN AWS_REGION S3_BUCKET ECR_REPOSITORY LAMBDA_FUNCTION_NAME FUNCTION_URL`.
+3. Set repo secrets `AWS_DEPLOY_ROLE_ARN AWS_RETRAIN_ROLE_ARN AWS_REPRODUCE_ROLE_ARN AWS_MONITOR_ROLE_ARN` (printed by `iam.sh`), `AWS_REGION S3_BUCKET ECR_REPOSITORY LAMBDA_FUNCTION_NAME FUNCTION_URL`. Environments: `production` and `retrain` admit protected branches only; `reproduce` requires the owner as reviewer (ADR-0013).
 4. First image + function: run `deploy.yml` by `workflow_dispatch` up to the push step, then `deploy/aws/lambda.sh <image uri>`; set `FUNCTION_URL`; re-run `deploy.yml`.
 5. Verify: `uv run python scripts/deploy_check.py --url $FUNCTION_URL --expect-version v<n> --malformed --cold`.
 
@@ -115,9 +115,25 @@ TLC answers 403 for a missing key, so a 403 is only "not published" when the mon
 - `was ingested at …`: TLC withdrew a month we hold. Nothing local changed; do not delete the snapshot. Find out why before retraining.
 - `GET refused`: HEAD succeeded but the download did not; re-run, then treat as the first case.
 
-## Rotate the GitHub OIDC role
+## GitHub OIDC roles (ADR-0013)
 
-`deploy/aws/iam.sh` is idempotent: edit `deploy/aws/iam/github-actions-policy.json`, re-run, done. Nothing to rotate in GitHub (no keys).
+`deploy/aws/iam.sh` is idempotent: edit `deploy/aws/iam/gha-<role>-policy.json`, re-run, done. Nothing to rotate in GitHub (no keys). `uv run pytest tests/test_iam.py` checks the trust subjects and that only deploy can change the service.
+
+**One-time migration from the single legacy role** (owner, with admin credentials):
+
+```
+deploy/aws/iam.sh                                   # creates the 4 roles, prints 4 ARNs
+for s in DEPLOY RETRAIN REPRODUCE MONITOR; do       # paste each ARN when prompted
+  gh secret set AWS_${s}_ROLE_ARN; done
+gh workflow run monitor.yml                         # proves the monitor role (URL + invoke)
+gh workflow run reproduce.yml -f mode=verify        # approve it; proves the reproduce role
+# the next deploy.yml / retrain.yml run proves those two
+deploy/aws/iam.sh --retire-legacy                   # deletes nyc-taxi-trip-duration-github-actions
+gh secret delete AWS_ROLE_ARN
+deploy/aws/lambda.sh <live image uri>               # drops the legacy role's URL grant
+```
+
+Then remove the `|| secrets.AWS_ROLE_ARN` fallbacks from the four workflows. `tests/test_iam.py` still passes; the fallback is not asserted.
 
 ## Restore from a fresh clone
 

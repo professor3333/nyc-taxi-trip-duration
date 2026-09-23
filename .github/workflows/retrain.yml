@@ -119,6 +119,9 @@ jobs:
     needs: plan
     if: needs.plan.outputs.should_train == 'true'
     runs-on: ubuntu-latest
+    # The OIDC subject becomes environment:retrain, the only one the retrain
+    # role trusts; the environment only admits protected branches (main).
+    environment: retrain
     permissions:
       contents: write
       pull-requests: write
@@ -143,7 +146,7 @@ jobs:
       - run: make setup
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_RETRAIN_ROLE_ARN || secrets.AWS_ROLE_ARN }}   # fallback: legacy role until iam.sh migration (runbook)
           aws-region: ${{ secrets.AWS_REGION }}
 
       # Only the pointer and the ingest report: the bytes are already in the
