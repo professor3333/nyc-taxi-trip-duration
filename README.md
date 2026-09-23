@@ -70,13 +70,13 @@ make pipeline-smoke        # whole pipeline on tests/fixtures with SQLite MLflow
 
 make compose-up            # postgres + mlflow (http://localhost:5001) + api (http://localhost:8080)
 make ingest MONTH=2025-02  # 404 until TLC publishes; idempotent via ETag
-make pipeline              # dvc repro; logs a run to MLflow
+make pipeline              # dvc repro in the canonical training env (Docker, linux/amd64); logs a run to MLflow
 make register              # refuses on dirty git / stale dvc
 make promote VERSION=3 REASON="..."
 make rollback REASON="..."
 make registry-status
 make docker-build-champion # fetch champion by md5 from the DVC remote, build tripduration:champion
-make reproduce             # fresh clone → dvc pull → dvc repro → metrics identical (exit criterion 1)
+make reproduce [REV=sha]   # fresh clone → dvc pull → repro in train env, no network → bit-identical vs the commit (exit criterion 1)
 make verify-raw            # md5 of every raw month vs its ingest report
 uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --cold
 ```
