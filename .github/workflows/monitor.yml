@@ -31,7 +31,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_MONITOR_ROLE_ARN || secrets.AWS_ROLE_ARN }}   # fallback: legacy role until iam.sh migration (runbook)
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Check the live service

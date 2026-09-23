@@ -13,7 +13,7 @@ export BUDGET_EMAIL=you@example.com AWS_REGION=us-east-1
 deploy/aws/budget.sh        # $5/month budget, alerts at $2 and $5
 deploy/aws/s3.sh            # private bucket: /dvc remote, /mlflow artefacts
 deploy/aws/ecr.sh           # image repo, keeps last 5
-deploy/aws/iam.sh           # lambda exec role; GitHub OIDC role scoped to this repo
+deploy/aws/iam.sh           # lambda exec role; one GitHub OIDC role per workflow (ADR-0013)
 # push the first image (deploy.yml does this; or by hand: make docker-build-champion, docker tag/push)
 deploy/aws/lambda.sh <ECR_URI>:<tag>   # function, Function URL, log group, alarms, SNS
 deploy/aws/teardown.sh      # everything above; asks once
@@ -34,8 +34,11 @@ uv run dvc push
 and set `MLFLOW_ARTIFACTS_DESTINATION=s3://<bucket>/mlflow` in `.env`.
 
 After `iam.sh` / `lambda.sh`, GitHub repository secrets needed by the workflows:
-`AWS_ROLE_ARN`, `AWS_REGION`, `S3_BUCKET`, `ECR_REPOSITORY`,
-`LAMBDA_FUNCTION_NAME`, `FUNCTION_URL`. Nothing else.
+`AWS_DEPLOY_ROLE_ARN`, `AWS_RETRAIN_ROLE_ARN`, `AWS_REPRODUCE_ROLE_ARN`,
+`AWS_MONITOR_ROLE_ARN` (one role per workflow, ADR-0013), `AWS_REGION`,
+`S3_BUCKET`, `ECR_REPOSITORY`, `LAMBDA_FUNCTION_NAME`, `FUNCTION_URL`. Nothing
+else. (`AWS_ROLE_ARN` is the legacy single role, used only as a fallback
+until the migration in `docs/runbook.md`.)
 
 **`lambda.sh` is declarative in intent.** env.sh is the desired state; each
 run compares memory, timeout, role, environment, image, URL auth type and URL

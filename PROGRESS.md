@@ -215,3 +215,16 @@ Tick a line only when its proof command passes, not when the code is written.
 - **Backup** (`make registry-backup`): `pg_dump -Fc`, a tar of the artifact volume, and a manifest with both sha256s and the state they must restore to, stored locally and in `s3://…/backups/registry/<stamp>/`. First backup `20260923T120302Z`: 3 versions, champion 3 / challenger 1, 10 runs, 22 MB.
 - **Restore demonstrated** (`make registry-restore-check`): restored into a scratch Compose project, compared every version, tag, alias and the run count, and md5-checked the model and fallback table of v1–v3 against the registered tags. Passed from the local copy and from the S3 copy. Negative control (manifest edited to champion=2): `FAIL aliases …`, exit 1.
 - **CI tracking records:** `retrain.yml` exports the training run to `reports/tracking/train_run.json` (committed with the candidate) and keeps the raw SQLite store as a 90-day artifact. `register.py` links the record only when its run id matches `model_meta.json`. The export was exercised inside `train_env.sh`, where the store records `/work/...` artifact paths. The first real proof is the next scheduled retrain.
+
+## CI identities separated; local ports on loopback — 2026-09-23 (ADR-0013)
+
+- **Found:** one OIDC role for every workflow, trusting `repo:<repo>:*`, so the daily monitor could push images and update Lambda. The `production` environment also had **no branch policy**: any branch could deploy as `environment:production`. MLflow and the API were published on `0.0.0.0`.
+- **GitHub side, live now:** `production` and a new `retrain` environment admit protected branches only. A new `reproduce` environment requires the owner's approval.
+- **AWS side, written and tested, not yet applied:** `iam.sh` creates four roles, each trusting exactly one immutable-id subject (`StringEquals`):
+  - deploy: `environment:production`; ECR push, Lambda code update, invoke; no config changes, no S3 writes.
+  - retrain: `environment:retrain`; DVC read + write.
+  - reproduce: `environment:reproduce`; DVC read + write.
+  - monitor: `ref:refs/heads/main`; invoke only.
+
+  Workflows use `secrets.AWS_<ROLE>_ROLE_ARN || secrets.AWS_ROLE_ARN`, so nothing breaks before the owner runs the migration in the runbook. Proof: `tests/test_iam.py` has 15 tests, running the real `iam.sh` against a fake `aws`.
+- **Compose:** ports bound to `127.0.0.1`. Verified: loopback 200, LAN address refused (curl exit 7), and the training container still reaches MLflow via `host.docker.internal`.

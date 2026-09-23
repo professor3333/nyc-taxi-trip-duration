@@ -34,7 +34,9 @@ services:
       --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION:-/mlflow/artifacts}
       --serve-artifacts
     ports:
-      - "${MLFLOW_PORT:-5001}:5000"
+      # Loopback only: the registry has no authentication, and the design is
+      # "laptop only" (ADR-0004). MLFLOW_BIND=0.0.0.0 opts in to LAN access.
+      - "${MLFLOW_BIND:-127.0.0.1}:${MLFLOW_PORT:-5001}:5000"
     volumes:
       - mlartifacts:/mlflow/artifacts
     healthcheck:
@@ -52,7 +54,7 @@ services:
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health/live')\""]
       interval: 10s
