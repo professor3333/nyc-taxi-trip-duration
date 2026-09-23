@@ -41,9 +41,26 @@ Fill from Cost Explorer filtered by tag `project=nyc-taxi-trip-duration`
 At this traffic Lambda is ~$0 vs ≥ $9 for Fargate; Fargate only wins if a
 cold start of several seconds is unacceptable, which for a demo it is not.
 
+## Plan: AWS Free plan, then off (decided 2026-09-23)
+
+Read from the account (`freetier:GetAccountPlanState`, 2026-09-23): plan
+**FREE**, status ACTIVE, **$140** of credits left, **expires 2027-03-22**. On
+this plan usage is paid from the credits and the account cannot be charged.
+When the credits run out or the plan expires, AWS closes the account unless it
+is upgraded, and its resources are deleted. The estimates above total about
+$1.15 a month, so the credits outlast the plan. The deadline is the binding
+limit.
+
+**Decision:** stay on the Free plan and never upgrade. Before 2027-03-22,
+archive the bucket and run `teardown.sh` (runbook: Teardown). It refuses to run
+without a complete local archive, and it deletes every project alarm by
+prefix. Reminder: the GitHub issue *"Tear down AWS before the Free plan
+expires"* (milestone due 2027-03-01). Until then the service stays live at $0.
+
 ## Teardown log
 
 | date | action |
 |---|---|
 | 2026-09-22 | created: budget, S3, ECR, IAM, Lambda + URL, logs, alarms, SNS |
-| — | `deploy/aws/teardown.sh` not yet run |
+| 2026-09-23 | decided: Free plan until teardown before 2027-03-22; teardown.sh made safe (archive check, all alarms) |
+| — | `deploy/aws/teardown.sh` not yet run; due before 2027-03-22 |

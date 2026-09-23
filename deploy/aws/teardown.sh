@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 # Remove every resource the scripts above create. The budget is kept unless
-# KEEP_BUDGET=false. Empties the bucket first (DVC remote + MLflow artefacts:
-# make sure you have another copy). Asks once.
+# KEEP_BUDGET=false. Empties the bucket first: the DVC remote AND the registry
+# backups live there, so it refuses unless ARCHIVE_DIR holds a copy of the
+# bucket (docs/cost.md "Planned teardown"). Asks once.
 source "$(dirname "$0")/env.sh"
+if [ "${SKIP_ARCHIVE_CHECK:-false}" != "true" ]; then
+  : "${ARCHIVE_DIR:?set ARCHIVE_DIR to the local copy of s3://$S3_BUCKET (aws s3 sync), or SKIP_ARCHIVE_CHECK=true to lose it}"
+  REMOTE=$(aws s3 ls "s3://$S3_BUCKET" --recursive | wc -l | tr -d ' ')
+  LOCAL=$(find "$ARCHIVE_DIR" -type f | wc -l | tr -d ' ')
+  if [ "$LOCAL" -lt "$REMOTE" ]; then
+    echo "archive $ARCHIVE_DIR has $LOCAL files, bucket has $REMOTE: sync it first" >&2; exit 1
+  fi
+  log "archive $ARCHIVE_DIR holds $LOCAL files (bucket: $REMOTE)"
+fi
 read -r -p "Tear down ALL ${PROJECT} resources in ${ACCOUNT_ID}/${AWS_REGION}, including s3://${S3_BUCKET}? [yes/NO] " ans
 [ "$ans" = "yes" ] || { echo "aborted"; exit 1; }
 
 aws lambda delete-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || true
 aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null && log "deleted lambda" || true
-for NAME in ErrorCount FallbackCount LatencyP95 InvalidRequests PredictionMedianHigh; do
-  aws cloudwatch delete-alarms --alarm-names "${PROJECT}-${NAME}" 2>/dev/null || true
-done
+# Every alarm monitoring.sh creates carries the project prefix; delete by
+# prefix so a new alarm can never be left behind (a hardcoded list missed 9).
+ALARMS=$(aws cloudwatch describe-alarms --alarm-name-prefix "${PROJECT}-" --query 'MetricAlarms[].AlarmName' --output text)
+if [ -n "$ALARMS" ]; then
+  # shellcheck disable=SC2086 # word-splitting the names is the point
+  aws cloudwatch delete-alarms --alarm-names $ALARMS && log "deleted alarms: $ALARMS"
+fi
 aws logs delete-log-group --log-group-name "/aws/lambda/${LAMBDA_FUNCTION_NAME}" 2>/dev/null && log "deleted log group" || true
 TOPIC_ARN=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${PROJECT}-alerts')].TopicArn" --output text)
 [ -n "$TOPIC_ARN" ] && aws sns delete-topic --topic-arn "$TOPIC_ARN" && log "deleted sns topic" || true
