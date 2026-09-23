@@ -59,13 +59,20 @@ def _with_keys(
     )
 
 
-def table_version(table: pd.DataFrame) -> str:
-    """A content-derived version for the baseline: same medians, same version.
+def table_version(table: pd.DataFrame, edges: tuple[int, ...], min_count: int) -> str:
+    """A content-derived version for the baseline: same behaviour, same version.
 
     The fallback ships in every image and can serve on its own, so it needs an
-    identity independent of whichever model it accompanies.
+    identity independent of whichever model it accompanies. The identity covers
+    everything a prediction reads: the medians *and* the hour-bucket edges they
+    are looked up through (the same medians under other edges predict other
+    durations), plus ``min_count``, which decided which cells exist. The table
+    is canonicalised first (sorted, ``n`` as int) so a save/load round trip
+    keeps the version.
     """
-    payload = table.sort_values(COLUMNS[:-2], na_position="first").to_csv(index=False)
+    canon = table.sort_values(COLUMNS[:-2], na_position="first").astype({"n": "int64"})
+    header = f"edges={list(edges)};min_count={int(min_count)};levels={list(LEVELS)}\n"
+    payload = header + canon.to_csv(index=False)
     return "fb-" + hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
@@ -77,7 +84,7 @@ class FallbackTable:
 
     @property
     def version(self) -> str:
-        return table_version(self.table)
+        return table_version(self.table, self.edges, self.min_count)
 
     @classmethod
     def fit(
@@ -152,6 +159,8 @@ class FallbackTable:
         meta = df[df["level"] == "_meta"].iloc[0]
         edges = tuple(int(e) for e in df.loc[df["level"] == "_edges", "hour_bucket"])
         table = df[~df["level"].isin(["_meta", "_edges"])].reset_index(drop=True)
+        # the _meta/_edges rows have no n, so parquet stored the column as float
+        table = table.astype({"n": "int64"})
         return cls(table=table, edges=edges, min_count=int(meta["median"]))
 
     def level_counts(self) -> dict[str, int]:

@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -55,6 +55,12 @@ register:     ## Register current DVC outputs as a new model version (refuses di
 
 promote:      ## Promote a version: make promote VERSION=2 REASON="beats v1 on 2024-12"
 	uv run python scripts/promote.py --version $(VERSION) --reason "$(REASON)"
+
+promote-recover: ## Finish an interrupted promote/rollback/refresh (see docs/runbook.md)
+	uv run python scripts/promote.py --recover
+
+promote-abort: ## Undo an interrupted promote/rollback/refresh
+	uv run python scripts/promote.py --abort
 
 rollback:     ## Roll champion back to previous_version: make rollback REASON="deploy_check failed"
 	uv run python scripts/promote.py --rollback --reason "$(REASON)"

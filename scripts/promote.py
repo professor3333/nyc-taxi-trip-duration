@@ -3,9 +3,13 @@
     uv run python scripts/promote.py --version 2 --reason "beats v1 on 2024-12"
     uv run python scripts/promote.py --rollback --reason "deploy_check failed"
     uv run python scripts/promote.py --status
+    uv run python scripts/promote.py --recover   # finish an interrupted operation
+    uv run python scripts/promote.py --abort     # or undo it
 
-Checks ADR-0007's gate, sets aliases, writes models/champion.json, appends
-docs/promotions.md. Refuses if the alias and champion.json disagree.
+Checks ADR-0007's gate, then runs one transaction: verify and stage every new
+file, write a journal, move the aliases, install the files. A failure before
+the journal changes nothing; after it, every command refuses until --recover
+or --abort. Refuses if the alias, champion.json and the fixture disagree.
 """
 
 import argparse
@@ -13,7 +17,15 @@ import json
 import os
 import sys
 
-from tripduration.registry import RegistryError, promote, refresh, rollback, summary
+from tripduration.registry import (
+    RegistryError,
+    abort,
+    promote,
+    recover,
+    refresh,
+    rollback,
+    summary,
+)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -26,6 +38,10 @@ if __name__ == "__main__":
         action="store_true",
         help="rewrite the current champion's release record; no alias change",
     )
+    g.add_argument(
+        "--recover", action="store_true", help="finish an interrupted operation"
+    )
+    g.add_argument("--abort", action="store_true", help="undo an interrupted operation")
     ap.add_argument("--reason", default="")
     ap.add_argument(
         "--force", action="store_true", help="bypass the gate; recorded as FORCED"
@@ -33,7 +49,15 @@ if __name__ == "__main__":
     args = ap.parse_args()
     uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001")
     try:
-        if args.refresh:
+        if args.recover:
+            j = recover(uri)
+            print(f"finished the interrupted {j['action']} to v{j['version']}")
+        elif args.abort:
+            j = abort(uri)
+            print(f"undid the interrupted {j['action']} to v{j['version']}")
+            print("aliases and release files are back to their prior state")
+            sys.exit(0)
+        elif args.refresh:
             s = refresh(uri)
             print(f"release record refreshed for v{s.version} (aliases unchanged)")
         elif args.status:

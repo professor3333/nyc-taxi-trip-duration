@@ -13,7 +13,9 @@ import json
 import os
 import pickle
 import platform
+import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -227,18 +229,6 @@ def version_tags(
     return dict(client.get_model_version(model_name, str(version)).tags)
 
 
-def check_consistent(
-    client: MlflowClient, state: ChampionState | None, model_name: str = MODEL_NAME
-) -> None:
-    alias_v = resolve_alias(client, CHAMPION, model_name)
-    file_v = state.version if state else None
-    if alias_v != file_v:
-        raise RegistryError(
-            f"alias champion={alias_v} but champion.json says {file_v}; "
-            "reconcile before promoting"
-        )
-
-
 @dataclass(frozen=True)
 class Gate:
     passed: bool
@@ -295,33 +285,63 @@ def promotion_gate(
     return Gate(passed=not reasons, reasons=tuple(reasons))
 
 
-def _log_promotion(line: str, log_path: Path = PROMOTIONS_LOG) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    if not log_path.exists():
-        log_path.write_text(
-            "# Promotions\n\n"
-            "One line per alias change, appended by `scripts/promote.py`.\n\n"
-            "| when (UTC) | action | from | to | test month | MAE test model "
-            "| MAE test fallback | train months | dvc.lock | git sha | reason |\n"
-            "|---|---|---|---|---|---|---|---|---|---|---|\n"
-        )
-    with log_path.open("a") as fh:
-        fh.write(line + "\n")
+def _log_header() -> str:
+    return (
+        "# Promotions\n\n"
+        "One line per alias change, appended by `scripts/promote.py`.\n\n"
+        "| when (UTC) | action | from | to | test month | MAE test model "
+        "| MAE test fallback | train months | dvc.lock | git sha | reason |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|\n"
+    )
 
 
-def save_champion_fixture(
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _download_version(
     client: MlflowClient,
     version: int,
     model_name: str,
-    dest: Path = CHAMPION_FIXTURE_FILE,
-) -> str:
+    tags: dict[str, str],
+    dest: Path,
+) -> Path:
+    """Download the version's ``models/`` artefacts into ``dest`` and check them.
+
+    The registered tags say which bytes this version is (``model_md5``,
+    ``fallback_md5``); a download that differs is refused *before* anything
+    about the release changes, rather than discovered by a deploy.
+    """
+    mv = client.get_model_version(model_name, str(version))
+    if not mv.run_id:
+        raise RegistryError(f"version {version} has no run id; cannot fetch artefacts")
+    dest.mkdir(parents=True, exist_ok=True)
+    local = Path(client.download_artifacts(mv.run_id, "models", str(dest)))
+    for name, tag in (
+        ("model.pkl", "model_md5"),
+        ("fallback_table.parquet", "fallback_md5"),
+    ):
+        path = local / name
+        if not path.exists():
+            raise RegistryError(f"version {version}: artefact {name} missing")
+        if file_md5(path) != tags.get(tag):
+            raise RegistryError(
+                f"version {version}: {name} md5 {file_md5(path)} != registered "
+                f"{tag} {tags.get(tag)}"
+            )
+    if not (local / "model_meta.json").exists():
+        raise RegistryError(f"version {version}: artefact model_meta.json missing")
+    return local
+
+
+def save_champion_fixture(local: Path, dest: Path) -> str:
     """Write this version's predictions on the fixed request grid, and hash them.
 
     This is what makes "the previous version's predictions are restored"
     checkable rather than a claim: after a rollback, the live service must
     reproduce exactly these numbers (`deploy_check.py --expect-fixture`).
-    Computed from the version's own artefacts, so it works for versions
-    registered before the grid existed.
+    Computed from the version's own (already verified) artefacts in ``local``,
+    so it works for versions registered before the grid existed.
     """
     import pandas as pd
 
@@ -329,39 +349,14 @@ def save_champion_fixture(
     from tripduration.fallback import FallbackTable
     from tripduration.features import ReferenceData
 
-    mv = client.get_model_version(model_name, str(version))
-    if not mv.run_id:
-        raise RegistryError(
-            f"version {version} has no run id; cannot rebuild its predictions"
-        )
-    local = Path(client.download_artifacts(mv.run_id, "models"))
     with (local / "model.pkl").open("rb") as fh:
-        model = pickle.load(fh)  # noqa: S301 - our own registered artefact
+        model = pickle.load(fh)  # noqa: S301 - our own registered, md5-checked artefact
     fb = FallbackTable.load(local / "fallback_table.parquet")
     ref = ReferenceData.load(REFERENCE_CSV, HOLIDAYS_CSV)
     frame: pd.DataFrame = fixture_predictions(model, fb, ref)
     dest.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(dest, index=False)
-    return hashlib.sha256(dest.read_bytes()).hexdigest()
-
-
-def save_champion_meta(
-    client: MlflowClient, version: int, model_name: str, dest: Path = CHAMPION_META_FILE
-) -> None:
-    """Copy the registered version's model_meta.json into git.
-
-    The deploy needs the champion's feature list, and the commit that produced
-    it can be unreachable after a squash merge, so the file travels with
-    champion.json instead of being read out of git history.
-    """
-    mv = client.get_model_version(model_name, str(version))
-    if not mv.run_id:
-        raise RegistryError(
-            f"version {version} has no run id; cannot fetch model_meta.json"
-        )
-    local = client.download_artifacts(mv.run_id, "models/model_meta.json")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(Path(local).read_text())
+    return _sha256(dest)
 
 
 def _reference_md5(
@@ -385,6 +380,272 @@ def _row(
     )
 
 
+# --- the release transaction -----------------------------------------------------
+#
+# A promotion changes two systems that cannot be updated together: the MLflow
+# aliases and four files in git (champion.json, champion_meta.json,
+# champion_fixture.csv, promotions.md). The order below makes every failure
+# either invisible or recoverable:
+#
+#   1. prepare   download + md5-check the artefacts, build every new file in a
+#                staging directory, copy the current files aside. Nothing that
+#                anyone reads has changed; a failure here just deletes staging.
+#   2. journal   write .promotion/journal.json (atomic rename). From here on the
+#                operation is *committed*: it must be finished or undone.
+#   3. aliases   champion, then challenger.
+#   4. install   each staged file renamed over its destination (atomic per file).
+#   5. done      delete the journal, then staging.
+#
+# While a journal exists every other operation refuses, and `promote.py
+# --recover` finishes it (idempotent: re-sets aliases, installs what is still
+# staged) or `--abort` undoes it (restores aliases and the copied-aside files).
+
+
+@dataclass(frozen=True)
+class ReleaseFiles:
+    """Where the release record lives. Tests point these at a tmp dir."""
+
+    champion: Path = CHAMPION_FILE
+    meta: Path = CHAMPION_META_FILE
+    fixture: Path = CHAMPION_FIXTURE_FILE
+    log: Path = PROMOTIONS_LOG
+
+    def items(self) -> tuple[tuple[str, Path], ...]:
+        return (
+            ("champion", self.champion),
+            ("meta", self.meta),
+            ("fixture", self.fixture),
+            ("log", self.log),
+        )
+
+    @property
+    def staging(self) -> Path:
+        return self.champion.parent / ".promotion"
+
+    @property
+    def journal(self) -> Path:
+        return self.staging / "journal.json"
+
+
+def _checkpoint(step: str) -> None:
+    """Called after every state transition. A no-op; tests make it raise to
+    prove each intermediate state is recoverable."""
+
+
+def _alias_state(client: MlflowClient, model_name: str) -> dict[str, int | None]:
+    return {
+        CHAMPION: resolve_alias(client, CHAMPION, model_name),
+        CHALLENGER: resolve_alias(client, CHALLENGER, model_name),
+    }
+
+
+def _set_alias(
+    client: MlflowClient, model_name: str, alias: str, version: int | None
+) -> None:
+    if version is None:
+        if resolve_alias(client, alias, model_name) is not None:
+            client.delete_registered_model_alias(model_name, alias)
+    else:
+        client.set_registered_model_alias(model_name, alias, str(version))
+
+
+def _refuse_if_in_progress(files: ReleaseFiles) -> None:
+    if files.journal.exists():
+        j = json.loads(files.journal.read_text())
+        raise RegistryError(
+            f"an interrupted {j['action']} to v{j['version']} (started "
+            f"{j['created_at']}) is recorded in {files.journal}; run "
+            "`promote.py --recover` to finish it or `--abort` to undo it"
+        )
+
+
+def check_consistent(
+    client: MlflowClient,
+    state: ChampionState | None,
+    model_name: str = MODEL_NAME,
+    files: ReleaseFiles | None = None,
+) -> None:
+    """The alias, champion.json and the fixture it vouches for must agree."""
+    if files is not None:
+        _refuse_if_in_progress(files)
+    alias_v = resolve_alias(client, CHAMPION, model_name)
+    file_v = state.version if state else None
+    if alias_v != file_v:
+        raise RegistryError(
+            f"alias champion={alias_v} but champion.json says {file_v}; "
+            "reconcile before promoting"
+        )
+    if files is not None and state is not None and state.fixture_sha256:
+        actual = _sha256(files.fixture) if files.fixture.exists() else "missing"
+        if actual != state.fixture_sha256:
+            raise RegistryError(
+                f"{files.fixture} sha256 {actual} != champion.json fixture_sha256 "
+                f"{state.fixture_sha256}; reconcile before promoting"
+            )
+
+
+def _state_for(
+    client: MlflowClient,
+    version: int,
+    model_name: str,
+    tags: dict[str, str],
+    *,
+    previous_version: int | None,
+    reason: str,
+    promoted_at: str,
+    fixture_sha256: str,
+) -> ChampionState:
+    mv = client.get_model_version(model_name, str(version))
+    return ChampionState(
+        model_name=model_name,
+        version=version,
+        run_id=mv.run_id or "",
+        git_sha=tags["git_sha"],
+        model_md5=tags["model_md5"],
+        fallback_md5=tags["fallback_md5"],
+        test_month=tags["test_month"],
+        mae_test_model=float(tags["mae_test_model"]),
+        mae_test_fallback=float(tags["mae_test_fallback"]),
+        promoted_at=promoted_at,
+        previous_version=previous_version,
+        reason=reason,
+        reference_md5=_reference_md5(),
+        train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
+        dvc_lock_md5=tags.get("dvc_lock_md5", ""),
+        fixture_sha256=fixture_sha256,
+        fixture_platform=f"{platform.system()}-{platform.machine()}",
+    )
+
+
+def _transact(
+    client: MlflowClient,
+    *,
+    action: str,
+    version: int,
+    model_name: str,
+    files: ReleaseFiles,
+    aliases_after: dict[str, int | None],
+    build_state: Callable[[str], ChampionState],
+    log_row: Callable[[ChampionState], str] | None,
+) -> ChampionState:
+    """Prepare, journal, move aliases, install files. See the comment above."""
+    staging = files.staging
+    if staging.exists():  # a prepare that failed before its journal: never committed
+        shutil.rmtree(staging)
+    staged, backup = staging / "staged", staging / "backup"
+    staged.mkdir(parents=True)
+    backup.mkdir()
+    try:
+        tags = version_tags(client, version, model_name)
+        local = _download_version(
+            client, version, model_name, tags, staging / "download"
+        )
+        fixture_sha = save_champion_fixture(local, staged / "fixture")
+        state = build_state(fixture_sha)
+        state.write(staged / "champion")
+        (staged / "meta").write_text((local / "model_meta.json").read_text())
+        log_text = files.log.read_text() if files.log.exists() else _log_header()
+        if log_row is not None:
+            log_text += log_row(state) + "\n"
+        (staged / "log").write_text(log_text)
+        existed: dict[str, bool] = {}
+        for key, dest in files.items():
+            existed[key] = dest.exists()
+            if dest.exists():
+                shutil.copy2(dest, backup / key)
+        journal = {
+            "action": action,
+            "version": version,
+            "model_name": model_name,
+            "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "aliases_before": _alias_state(client, model_name),
+            "aliases_after": aliases_after,
+            "files": {
+                key: {
+                    "dest": str(dest),
+                    "sha256": _sha256(staged / key),
+                    "existed": existed[key],
+                }
+                for key, dest in files.items()
+            },
+        }
+        tmp = staging / "journal.json.part"
+        tmp.write_text(json.dumps(journal, indent=2, sort_keys=True) + "\n")
+        _checkpoint("prepared")
+        tmp.replace(files.journal)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    _checkpoint("journaled")
+    _finish(client, json.loads(files.journal.read_text()), files)
+    return state
+
+
+def _finish(client: MlflowClient, journal: dict[str, Any], files: ReleaseFiles) -> None:
+    """Roll a journaled operation forward. Idempotent, so --recover reruns it."""
+    model_name = journal["model_name"]
+    for alias in (CHAMPION, CHALLENGER):
+        _set_alias(client, model_name, alias, journal["aliases_after"][alias])
+        _checkpoint(f"alias:{alias}")
+    staged = files.staging / "staged"
+    for key, rec in journal["files"].items():
+        src, dest = staged / key, Path(rec["dest"])
+        if src.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            src.replace(dest)
+        elif not dest.exists() or _sha256(dest) != rec["sha256"]:
+            raise RegistryError(
+                f"cannot finish: staged {key} is gone and {dest} is not the "
+                "journaled content; run --abort"
+            )
+        _checkpoint(f"install:{key}")
+    files.journal.unlink()
+    _checkpoint("journal_removed")
+    shutil.rmtree(files.staging)
+
+
+def _read_journal(files: ReleaseFiles) -> dict[str, Any]:
+    if not files.journal.exists():
+        raise RegistryError(f"no interrupted operation: {files.journal} does not exist")
+    data: dict[str, Any] = json.loads(files.journal.read_text())
+    return data
+
+
+def recover(tracking_uri: str, *, files: ReleaseFiles | None = None) -> dict[str, Any]:
+    """Finish an interrupted promote/rollback/refresh from its journal."""
+    files = files or ReleaseFiles()
+    journal = _read_journal(files)
+    mlflow.set_tracking_uri(tracking_uri)
+    _finish(MlflowClient(), journal, files)
+    return journal
+
+
+def abort(tracking_uri: str, *, files: ReleaseFiles | None = None) -> dict[str, Any]:
+    """Undo an interrupted operation: aliases and files back to the journal's
+    'before' state, whichever steps had already happened."""
+    files = files or ReleaseFiles()
+    journal = _read_journal(files)
+    mlflow.set_tracking_uri(tracking_uri)
+    client = MlflowClient()
+    model_name = journal["model_name"]
+    for alias in (CHAMPION, CHALLENGER):
+        _set_alias(client, model_name, alias, journal["aliases_before"][alias])
+    backup = files.staging / "backup"
+    for key, rec in journal["files"].items():
+        dest = Path(rec["dest"])
+        if rec["existed"]:
+            shutil.copy2(backup / key, dest.with_suffix(dest.suffix + ".part"))
+            dest.with_suffix(dest.suffix + ".part").replace(dest)
+        else:
+            dest.unlink(missing_ok=True)
+    files.journal.unlink()
+    shutil.rmtree(files.staging)
+    return journal
+
+
+# --- operations -------------------------------------------------------------------
+
+
 def promote(
     tracking_uri: str,
     version: int,
@@ -392,16 +653,14 @@ def promote(
     reason: str,
     force: bool = False,
     model_name: str = MODEL_NAME,
-    champion_file: Path = CHAMPION_FILE,
-    log_path: Path = PROMOTIONS_LOG,
-    meta_file: Path = CHAMPION_META_FILE,
-    fixture_file: Path = CHAMPION_FIXTURE_FILE,
+    files: ReleaseFiles | None = None,
     monitoring_dir: Path = Path("reports/monitoring"),
 ) -> ChampionState:
+    files = files or ReleaseFiles()
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
-    current = ChampionState.read(champion_file)
-    check_consistent(client, current, model_name)
+    current = ChampionState.read(files.champion)
+    check_consistent(client, current, model_name, files)
 
     chal = version_tags(client, version, model_name)
     champ = version_tags(client, current.version, model_name) if current else None
@@ -416,81 +675,81 @@ def promote(
     if not gate.passed:
         reason = f"FORCED ({'; '.join(gate.reasons)}): {reason}"
 
-    client.set_registered_model_alias(model_name, CHAMPION, str(version))
-    if current is not None and current.version != version:
-        client.set_registered_model_alias(model_name, CHALLENGER, str(current.version))
-    mv = client.get_model_version(model_name, str(version))
-    state = ChampionState(
-        model_name=model_name,
+    before = _alias_state(client, model_name)
+    after = {
+        CHAMPION: version,
+        CHALLENGER: (
+            current.version
+            if current is not None and current.version != version
+            else before[CHALLENGER]
+        ),
+    }
+    prev = current.version if current else None
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    return _transact(
+        client,
+        action="promote",
         version=version,
-        run_id=mv.run_id or "",
-        git_sha=chal["git_sha"],
-        model_md5=chal["model_md5"],
-        fallback_md5=chal["fallback_md5"],
-        test_month=chal["test_month"],
-        mae_test_model=float(chal["mae_test_model"]),
-        mae_test_fallback=float(chal["mae_test_fallback"]),
-        promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        previous_version=current.version if current else None,
-        reason=reason,
-        reference_md5=_reference_md5(),
-        train_months=tuple(t for t in (chal.get("train_months") or "").split(",") if t),
-        dvc_lock_md5=chal.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(client, version, model_name, fixture_file),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
+        model_name=model_name,
+        files=files,
+        aliases_after=after,
+        build_state=lambda sha: _state_for(
+            client,
+            version,
+            model_name,
+            chal,
+            previous_version=prev,
+            reason=reason,
+            promoted_at=now,
+            fixture_sha256=sha,
+        ),
+        log_row=lambda st: _row(st, "promote", prev, reason),
     )
-    state.write(champion_file)
-    save_champion_meta(client, version, model_name, meta_file)
-    _log_promotion(
-        _row(state, "promote", current.version if current else None, reason), log_path
-    )
-    return state
 
 
 def refresh(
     tracking_uri: str,
     *,
     model_name: str = MODEL_NAME,
-    champion_file: Path = CHAMPION_FILE,
-    meta_file: Path = CHAMPION_META_FILE,
-    fixture_file: Path = CHAMPION_FIXTURE_FILE,
+    files: ReleaseFiles | None = None,
 ) -> ChampionState:
     """Rewrite the current champion's release record without touching aliases.
 
     For when the record's shape changes (a new field) but the serving version
     does not. Not a promotion: the gate does not apply because nothing moves.
+    It goes through the same transaction, so a failed refresh leaves the old
+    record intact.
     """
+    files = files or ReleaseFiles()
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
-    current = ChampionState.read(champion_file)
+    current = ChampionState.read(files.champion)
     if current is None:
         raise RegistryError("no champion.json to refresh")
+    _refuse_if_in_progress(files)
+    # Not check_consistent's fixture test: repairing a stale fixture is a
+    # legitimate reason to refresh. The alias must still agree.
     check_consistent(client, current, model_name)
     tags = version_tags(client, current.version, model_name)
-    state = ChampionState(
-        model_name=model_name,
+    return _transact(
+        client,
+        action="refresh",
         version=current.version,
-        run_id=current.run_id,
-        git_sha=tags["git_sha"],
-        model_md5=tags["model_md5"],
-        fallback_md5=tags["fallback_md5"],
-        test_month=tags["test_month"],
-        mae_test_model=float(tags["mae_test_model"]),
-        mae_test_fallback=float(tags["mae_test_fallback"]),
-        promoted_at=current.promoted_at,
-        previous_version=current.previous_version,
-        reason=current.reason,
-        reference_md5=_reference_md5(),
-        train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
-        dvc_lock_md5=tags.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(
-            client, current.version, model_name, fixture_file
+        model_name=model_name,
+        files=files,
+        aliases_after=_alias_state(client, model_name),
+        build_state=lambda sha: _state_for(
+            client,
+            current.version,
+            model_name,
+            tags,
+            previous_version=current.previous_version,
+            reason=current.reason,
+            promoted_at=current.promoted_at,
+            fixture_sha256=sha,
         ),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
+        log_row=None,
     )
-    state.write(champion_file)
-    save_champion_meta(client, current.version, model_name, meta_file)
-    return state
 
 
 def rollback(
@@ -498,50 +757,42 @@ def rollback(
     *,
     reason: str,
     model_name: str = MODEL_NAME,
-    champion_file: Path = CHAMPION_FILE,
-    log_path: Path = PROMOTIONS_LOG,
-    meta_file: Path = CHAMPION_META_FILE,
-    fixture_file: Path = CHAMPION_FIXTURE_FILE,
+    files: ReleaseFiles | None = None,
 ) -> ChampionState:
     """Set champion back to the previous version recorded in champion.json."""
+    files = files or ReleaseFiles()
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
-    current = ChampionState.read(champion_file)
+    current = ChampionState.read(files.champion)
     if current is None:
         raise RegistryError("no champion.json; nothing to roll back")
-    check_consistent(client, current, model_name)
+    check_consistent(client, current, model_name, files)
     if current.previous_version is None:
         raise RegistryError(
             "champion.json has no previous_version; nothing to roll back to"
         )
     prev = current.previous_version
     tags = version_tags(client, prev, model_name)
-    client.set_registered_model_alias(model_name, CHAMPION, str(prev))
-    client.set_registered_model_alias(model_name, CHALLENGER, str(current.version))
-    mv = client.get_model_version(model_name, str(prev))
-    state = ChampionState(
-        model_name=model_name,
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    return _transact(
+        client,
+        action="rollback",
         version=prev,
-        run_id=mv.run_id or "",
-        git_sha=tags["git_sha"],
-        model_md5=tags["model_md5"],
-        fallback_md5=tags["fallback_md5"],
-        test_month=tags["test_month"],
-        mae_test_model=float(tags["mae_test_model"]),
-        mae_test_fallback=float(tags["mae_test_fallback"]),
-        promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        previous_version=current.version,
-        reason=reason,
-        reference_md5=_reference_md5(),
-        train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
-        dvc_lock_md5=tags.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(client, prev, model_name, fixture_file),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
+        model_name=model_name,
+        files=files,
+        aliases_after={CHAMPION: prev, CHALLENGER: current.version},
+        build_state=lambda sha: _state_for(
+            client,
+            prev,
+            model_name,
+            tags,
+            previous_version=current.version,
+            reason=reason,
+            promoted_at=now,
+            fixture_sha256=sha,
+        ),
+        log_row=lambda st: _row(st, "rollback", current.version, reason),
     )
-    state.write(champion_file)
-    save_champion_meta(client, prev, model_name, meta_file)
-    _log_promotion(_row(state, "rollback", current.version, reason), log_path)
-    return state
 
 
 def summary(tracking_uri: str, model_name: str = MODEL_NAME) -> dict[str, Any]:
@@ -564,4 +815,9 @@ def summary(tracking_uri: str, model_name: str = MODEL_NAME) -> dict[str, Any]:
             key=lambda d: d["version"],
         ),
         "champion_file": asdict(s) if (s := ChampionState.read()) else None,
+        "interrupted": (
+            json.loads(ReleaseFiles().journal.read_text())
+            if ReleaseFiles().journal.exists()
+            else None
+        ),
     }
