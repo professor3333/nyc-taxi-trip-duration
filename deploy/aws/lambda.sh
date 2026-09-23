@@ -51,13 +51,15 @@ else
     log "updated code -> $IMAGE_URI"
   fi
 fi
-# Reserved concurrency caps cost. A new account has a total limit of 10, and
-# AWS refuses a reservation that leaves fewer than 10 unreserved — in that case
-# the account limit itself is the cap, which is what we wanted anyway.
+# Reserved concurrency bounds how many environments run at once: a rate
+# limit, not a dollar cap (docs/cost.md "What limits spending"). A new account
+# has a total limit of 10 and AWS refuses a reservation that leaves fewer than
+# 10 unreserved, so on such an account nothing is reserved and the account
+# limit is the only bound.
 if ! aws lambda put-function-concurrency "${FN[@]}" \
      --reserved-concurrent-executions "$LAMBDA_RESERVED_CONCURRENCY" >/dev/null 2>&1; then
   LIMIT=$(aws lambda get-account-settings --query AccountLimit.ConcurrentExecutions --output text)
-  log "could not reserve $LAMBDA_RESERVED_CONCURRENCY; account concurrency limit is $LIMIT and already caps spend"
+  log "could not reserve $LAMBDA_RESERVED_CONCURRENCY; account concurrency limit is $LIMIT (a rate bound, not a cost cap)"
 fi
 
 # --- Function URL -------------------------------------------------------------
