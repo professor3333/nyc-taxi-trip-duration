@@ -224,9 +224,15 @@ jobs:
           } > body.md
           TITLE="Retrain candidate $M (${LABEL#candidate-})"
           if [ -n "$CANDIDATE_PR" ]; then
-            gh pr edit "$CANDIDATE_PR" --title "$TITLE" --body-file body.md \
-              --remove-label candidate-passed --remove-label candidate-failed || true
-            gh pr edit "$CANDIDATE_PR" --add-label retrain --add-label "$LABEL"
+            # REST, not `gh pr edit`: on this repo that fails with a GraphQL
+            # "Projects (classic) is being deprecated" error.
+            gh api -X PATCH "repos/{owner}/{repo}/pulls/$CANDIDATE_PR" \
+              -f title="$TITLE" -F body=@body.md --silent
+            for old in candidate-passed candidate-failed; do
+              gh api -X DELETE "repos/{owner}/{repo}/issues/$CANDIDATE_PR/labels/$old" --silent 2>/dev/null || true
+            done
+            gh api "repos/{owner}/{repo}/issues/$CANDIDATE_PR/labels" \
+              -f "labels[]=retrain" -f "labels[]=$LABEL" --silent
             gh pr comment "$CANDIDATE_PR" --body "Rebuilt in place by $RUN_URL (gate: ${LABEL#candidate-})."
             PR="$CANDIDATE_PR"
           else
