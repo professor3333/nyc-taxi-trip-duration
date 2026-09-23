@@ -538,6 +538,7 @@ def main() -> int:
             if restore is not None:
                 restore_environment(fn or args.function, restore)
         body = first["body"] if isinstance(first["body"], dict) else {}
+        evidence["cold"] = first
         check(
             "cold: fresh process",
             first["status"] == 200 and body.get("requests_before") == 0,
