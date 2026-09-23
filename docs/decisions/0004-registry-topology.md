@@ -40,7 +40,40 @@ switching is a config change, not a code change.
   candidate PR carries the outputs; the owner registers from the merged
   commit with `make register`.
 - Losing the laptop loses run history and aliases, not the ability to deploy
-  or roll back.
+  or roll back — **unless it is backed up**, which since 2026-09-23 it is (below).
+
+## Amendment (2026-09-23): the local registry's state is recoverable
+
+A local registry was the right cost choice, but it left the aliases, tags and
+run history in two Docker volumes on one laptop with no copy, and it left
+every CI training run in a SQLite file deleted with its runner.
+
+- **Backup:** `make registry-backup` runs `pg_dump -Fc` of the database, tars
+  the artifact volume, and writes a manifest with both sha256s and the state
+  the backup must restore to: every version's tags, source and run id, both
+  aliases, and the run count. It uploads all three to
+  `s3://<bucket>/backups/registry/<UTC stamp>/`. Run it after every
+  register/promote/rollback; `promote.py` prints that reminder. First backup:
+  `20260923T120302Z` (3 versions, champion 3 / challenger 1, 10 runs, 22 MB).
+- **Restore, demonstrated:** `make registry-restore-check FROM=<dir or s3://…>`
+  checks both files against the manifest, restores into a scratch Compose
+  project (`tripduration-restore-check`, port 5099), and compares every
+  version, tag and alias and the run count. It downloads each version's model
+  and fallback table and checks them against the registered md5s, then tears
+  the scratch project down. Passed from the local copy and from the S3 copy on
+  2026-09-23. A negative control (manifest edited to champion=2) failed with
+  exit 1. The real restore is the same script with
+  `--project nyc-taxi-trip-duration --port 5001 --overwrite` (runbook).
+- **CI tracking records:** `retrain.yml` exports its training run
+  (`scripts/export_run.py`: params, full metric history, tags, md5 of every
+  artifact) to `reports/tracking/train_run.json`, which is committed with the
+  candidate, and uploads the raw SQLite store as a 90-day run artifact.
+  `register.py` logs that record into the registration run and tags the
+  version with its path, sha256 and origin, but only when its `run_id` equals
+  the one in `model_meta.json`.
+- **Not automated:** backups are an owner action, like registering. Nothing
+  schedules them, because the registry only changes when the owner runs
+  something.
 - If the project ever needs CI-side registration, this ADR is superseded by
   option 2 and `retrain.yml` gains a `register` step behind an approval
   environment.

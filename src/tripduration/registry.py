@@ -138,6 +138,71 @@ def file_md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
+# --- durable tracking records -----------------------------------------------------
+
+TRAIN_RUN_RECORD = Path("reports/tracking/train_run.json")
+
+
+def export_run(
+    tracking_uri: str, run_id: str, dest: Path = TRAIN_RUN_RECORD
+) -> dict[str, Any]:
+    """Write a self-contained record of one tracking run to ``dest``.
+
+    Scheduled retrains track into a throwaway SQLite store on the runner
+    (ADR-0004: CI cannot reach the local registry), so without this the run a
+    candidate's ``model_meta.json`` names is gone when the job ends. The record
+    is committed with the candidate: params, every metric's full history, tags,
+    timing, and the md5 of every artifact the run logged, so the registered
+    version can be traced to it and its artefacts checked against it.
+    """
+    import tempfile
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    run = client.get_run(run_id)
+    exp = client.get_experiment(run.info.experiment_id)
+    history = {
+        key: [
+            {"step": m.step, "timestamp": m.timestamp, "value": m.value}
+            for m in client.get_metric_history(run_id, key)
+        ]
+        for key in sorted(run.data.metrics)
+    }
+    artefacts: dict[str, dict[str, Any]] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(client.download_artifacts(run_id, "", tmp))
+        for f in sorted(p for p in root.rglob("*") if p.is_file()):
+            artefacts[f.relative_to(root).as_posix()] = {
+                "md5": file_md5(f),
+                "bytes": f.stat().st_size,
+            }
+    record = {
+        "run_id": run_id,
+        "tracking_uri": tracking_uri,
+        "experiment": exp.name,
+        "status": run.info.status,
+        "start_time": run.info.start_time,
+        "end_time": run.info.end_time,
+        "params": dict(sorted(run.data.params.items())),
+        "metrics": dict(sorted(run.data.metrics.items())),
+        "metric_history": history,
+        "tags": {k: v for k, v in sorted(run.data.tags.items())},
+        "artifacts": artefacts,
+        "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return record
+
+
+def _train_run_record(train_run_id: str, record_path: Path) -> dict[str, Any] | None:
+    """The exported record of the run that trained these outputs, if it is the
+    one on disk (a record from an older candidate is not evidence for this one)."""
+    if not train_run_id or not record_path.exists():
+        return None
+    record: dict[str, Any] = json.loads(record_path.read_text())
+    return record if record.get("run_id") == train_run_id else None
+
+
 # --- register --------------------------------------------------------------------
 
 
@@ -147,6 +212,7 @@ def register(
     model_name: str = MODEL_NAME,
     metrics_path: Path = Path("metrics/eval.json"),
     meta_path: Path = Path("models/model_meta.json"),
+    train_record_path: Path = TRAIN_RUN_RECORD,
     require_clean: bool = True,
 ) -> int:
     """Log a registration run with the current DVC outputs and create a version.
@@ -184,6 +250,15 @@ def register(
         "train_run_id": meta.get("mlflow_run_id", ""),
         "stage": "register",
     }
+    # Where the training run's record lives: the registry itself when it
+    # trained here, or the exported record committed with a CI candidate.
+    record = _train_run_record(tags["train_run_id"], train_record_path)
+    if record is not None:
+        tags["train_run_record"] = train_record_path.as_posix()
+        tags["train_run_record_sha256"] = hashlib.sha256(
+            train_record_path.read_bytes()
+        ).hexdigest()
+        tags["train_run_tracking_uri"] = record["tracking_uri"]
     client = MlflowClient()
     with mlflow.start_run(run_name=f"register {sha[:8]}") as run:
         mlflow.set_tags(tags)
@@ -199,6 +274,8 @@ def register(
             mlflow.log_artifact(path, artifact_path="models")
         for path in EXTRA_ARTEFACTS:
             mlflow.log_artifact(path, artifact_path="provenance")
+        if record is not None:
+            mlflow.log_artifact(str(train_record_path), artifact_path="provenance")
         source = f"{run.info.artifact_uri}/models"
         run_id = run.info.run_id
     try:

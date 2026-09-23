@@ -31,6 +31,33 @@ git add models/champion.json docs/promotions.md && git commit -m "Roll back cham
 ```
 `deploy.yml` redeploys the previous version; `/health.model_version` must show it. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s) and push — the deploy needs only the file and the DVC remote.
 
+## Registry backup and restore
+
+After every `make register`, `make promote` or `make rollback`:
+
+```
+make registry-backup                      # dump + artifact tar + manifest, local and S3
+```
+
+To prove a backup is usable (do this after changing anything about the registry, and at least once per backup location):
+
+```
+make registry-restore-check FROM=s3://nyc-taxi-trip-duration-560512681455/backups/registry/<stamp>
+```
+
+It restores into a scratch Compose project on port 5099, compares every version, tag, alias and the run count with the manifest, md5-checks each version's model and fallback table, and tears the project down. It exits 1 on any difference.
+
+**The laptop is gone:** clone the repo and do the `.git/info/exclude` step (see "Restore from a fresh clone"). Then run `make compose-up` and:
+
+```
+aws s3 ls s3://nyc-taxi-trip-duration-560512681455/backups/registry/   # newest stamp
+uv run python scripts/registry_restore.py --from s3://…/backups/registry/<stamp> \
+    --project nyc-taxi-trip-duration --port 5001 --overwrite
+make registry-status                      # champion must equal models/champion.json
+```
+
+Anything registered after that backup is re-registered from its commit (`docs/promotions.md` names the sha).
+
 ## Interrupted promote / rollback / refresh
 
 `promote.py` works as one transaction: it verifies the version's artefacts (md5 vs registered tags), builds every new file in `models/.promotion/staged/`, copies the current files aside, and writes `models/.promotion/journal.json`. Only then does it move the aliases and rename the staged files into place. So:

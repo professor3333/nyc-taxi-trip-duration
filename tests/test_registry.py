@@ -526,3 +526,50 @@ def test_recover_and_abort_refuse_without_a_journal(registry: dict[str, Any]) ->
         reg.recover(registry["uri"], files=registry["files"])
     with pytest.raises(RegistryError, match="no interrupted"):
         reg.abort(registry["uri"], files=registry["files"])
+
+
+# --- durable tracking records -----------------------------------------------------
+
+
+def test_export_run_writes_a_self_contained_record(tmp_path: Path) -> None:
+    """What retrain.yml commits so the CI run outlives its throwaway store."""
+    import hashlib
+
+    uri = f"sqlite:///{tmp_path / 'ci.db'}"
+    mlflow.set_tracking_uri(uri)
+    exp = mlflow.set_experiment("ci")
+    art = tmp_path / "model_meta.json"
+    art.write_text('{"a": 1}\n')
+    with mlflow.start_run(experiment_id=exp.experiment_id) as run:
+        mlflow.log_params({"seed": 7, "model.max_iter": 10})
+        mlflow.log_metric("val_mae_model", 5.0, step=0)
+        mlflow.log_metric("val_mae_model", 4.5, step=1)
+        mlflow.set_tag("git_sha", "a" * 40)
+        mlflow.log_artifact(str(art), artifact_path="models")
+
+    dest = tmp_path / "reports" / "tracking" / "train_run.json"
+    reg.export_run(uri, run.info.run_id, dest)
+    rec = json.loads(dest.read_text())
+    assert rec["run_id"] == run.info.run_id and rec["experiment"] == "ci"
+    assert rec["status"] == "FINISHED" and rec["tracking_uri"] == uri
+    assert rec["params"] == {"model.max_iter": "10", "seed": "7"}
+    assert rec["metrics"] == {"val_mae_model": 4.5}
+    assert [p["value"] for p in rec["metric_history"]["val_mae_model"]] == [5.0, 4.5]
+    assert rec["tags"]["git_sha"] == "a" * 40
+    assert rec["artifacts"]["models/model_meta.json"] == {
+        "md5": hashlib.md5(art.read_bytes()).hexdigest(),
+        "bytes": art.stat().st_size,
+    }
+
+
+def test_train_run_record_is_only_evidence_for_its_own_run(tmp_path: Path) -> None:
+    rec = tmp_path / "train_run.json"
+    assert reg._train_run_record("r1", rec) is None  # no record
+    rec.write_text(json.dumps({"run_id": "r0", "tracking_uri": "sqlite:///x"}))
+    assert reg._train_run_record("r1", rec) is None  # an older candidate's
+    assert reg._train_run_record("", rec) is None  # untracked training
+    rec.write_text(json.dumps({"run_id": "r1", "tracking_uri": "sqlite:///x"}))
+    assert reg._train_run_record("r1", rec) == {
+        "run_id": "r1",
+        "tracking_uri": "sqlite:///x",
+    }
