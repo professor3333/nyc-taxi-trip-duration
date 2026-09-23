@@ -113,3 +113,8 @@ to an App token scoped to `contents` + `pull-requests` on this repo only.
   status checks succeeded on the head commit **and** GitHub reports the PR
   `CLEAN`. It exits non-zero otherwise. That output is the proof attached to
   the PR before merging.
+
+**Observed.** PR #46 (2025-04): the workflow commented the held run
+35816811535; `candidate_ci.sh` exited 2 before approval (PR `BLOCKED`) and 0
+after (`ci` success on the head, PR `CLEAN`); merged. Transcript in
+`docs/exit_criteria.md` §6.
