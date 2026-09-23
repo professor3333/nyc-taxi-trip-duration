@@ -30,9 +30,24 @@ class PredictRequest(BaseModel):
     @field_validator("departure_time")
     @classmethod
     def to_new_york_naive(cls, v: datetime) -> datetime:
-        """ADR-0009: aware -> New York local, then drop tzinfo. Naive stays as is."""
+        """ADR-0009: aware -> New York local, then drop tzinfo. Naive stays as is.
+
+        Converting an aware timestamp near `datetime.min` or `datetime.max`
+        can push it outside the representable range: `0001-01-01T00:00:00Z`
+        becomes year 0 in New York. `astimezone` then raises `OverflowError`,
+        which Pydantic does **not** turn into a validation error (it only
+        converts `ValueError` and `AssertionError`), so it used to reach the
+        generic handler as a 500. Such a request is malformed, not a server
+        fault, so it is re-raised as a `ValueError` and answered with 422.
+        """
         if v.tzinfo is not None:
-            v = v.astimezone(NY).replace(tzinfo=None)
+            try:
+                v = v.astimezone(NY).replace(tzinfo=None)
+            except (OverflowError, OSError, ValueError) as exc:
+                raise ValueError(
+                    "cannot be converted to America/New_York: the timestamp is "
+                    f"outside the representable range ({exc})"
+                ) from exc
         return v.replace(microsecond=0)
 
 

@@ -23,6 +23,7 @@ For each failure the system is designed to survive: behaviour, the log line, the
 | ECR image missing | `update-function-code` fails; old version keeps serving | AWS error in the run | — | re-run deploy |
 | DST fall-back hour in data | rows in the 3-hour window dropped in `validate` | rejection count `dst_transition_window` | `test_validate.py` DST cases | — |
 | tz-aware request | converted to New York local | — | `test_tz_aware_departure_converted_to_new_york` | — |
+| tz-aware request at the edge of `datetime`'s range | 422 with a field message; the conversion to New York would overflow | WARNING `validation_error` | `test_extreme_aware_timestamps_are_422_not_500` (6 cases), `test_extreme_aware_timestamp_in_batch_is_422`, fuzz over datetimes | — |
 
 **Observed live on 2026-09-22** (account 560512681455): malformed input (all
 nine cases → 422 with `request_id`, WARNING lines in CloudWatch), feature-list
