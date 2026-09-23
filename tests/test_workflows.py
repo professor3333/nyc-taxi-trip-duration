@@ -2,7 +2,7 @@
 
 Without an explicit `shell: bash`, steps run as `bash -e {0}` - no pipefail -
 so `deploy_check ... | tee check.txt || echo failed=true` never sees the
-check fail. Observed 2026-09-23: reproduce.yml run 35831123575 printed 161
+check fail. Observed 2026-09-23: reproduce.yml run 35831123575 printed 137
 differences and concluded `success`.
 """
 
