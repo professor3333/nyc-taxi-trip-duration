@@ -34,3 +34,6 @@ build/
 
 # Downloads awaiting (or refused by) the ingest checks; see ingest.py
 data/quarantine/
+
+# promote.py transaction staging + journal (present only mid-operation)
+models/.promotion/

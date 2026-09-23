@@ -27,8 +27,12 @@ ADR-0008) or `http://localhost:8080` under Compose.
 - `model_version` is `vN` only when the loaded model's md5 matches
   `models/champion.json`; otherwise `unregistered:<train sha>`, or
   `fallback-vN` / `fallback` when degraded, or `unavailable`.
-- `fallback_version` identifies the packaged baseline itself
-  (`fb-` + a hash of its medians), independent of any model.
+- `fallback_version` identifies the packaged baseline itself, independent of
+  any model: `fb-` + a hash of everything its predictions read (the medians,
+  the hour-bucket edges they are looked up through, `min_count` and the
+  cascade levels). Before 2026-09-23 it hashed the medians only, so a change
+  of edges kept the version while changing answers; the served table's
+  version string changed once when this was fixed.
 
 ## Validation
 

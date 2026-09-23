@@ -88,6 +88,35 @@ After rollback: alias `champion` = 1, `challenger` = 2, `champion.json›version
 exit criterion 2 (two `deploy.yml` runs and two `/health` outputs) waits for
 Phase 6.
 
+## Amendment (2026-09-23): promotion is a transaction
+
+The first implementation moved the `champion` alias *before* downloading the
+version's artefacts, generating its fixture and writing the release files, so
+a failure in any of those left the alias on one version and `champion.json`
+on another (reproduced: a fixture failure left alias = v2, file = v1). Now:
+
+1. **Prepare** — download the version's artefacts and refuse unless their md5s
+   equal the registered `model_md5` / `fallback_md5`; build `champion.json`,
+   `champion_meta.json`, `champion_fixture.csv` and the new `promotions.md` in
+   `models/.promotion/staged/`; copy the current files aside.
+2. **Journal** — `models/.promotion/journal.json` (atomic rename) records the
+   alias state before and after and each staged file's sha256. This is the
+   commit point.
+3. **Aliases**, then **install** (one atomic rename per file), then remove the
+   journal.
+
+A failure before step 2 changes nothing. After it, every command refuses until
+`--recover` (roll forward, idempotent) or `--abort` (restore the recorded
+before-state). The consistency check now also requires
+`champion_fixture.csv` to hash to `champion.json`'s `fixture_sha256`. Rollback
+and refresh use the same transaction. Each transition has a failure-injection
+test (`tests/test_registry.py`, 29 cases).
+
+The four files are still not replaced as one atomic unit — that is not
+possible across files without a pointer indirection — but no reader acts on a
+half-installed set: deploys read `main`, and nothing is committed until the
+command has finished and the owner commits.
+
 ## Consequences
 
 - `docs/promotions.md` is append-only and the audit trail.

@@ -14,7 +14,13 @@ from mlflow import MlflowClient
 
 from tripduration import registry as reg
 from tripduration.config import Params
-from tripduration.registry import ChampionState, Gate, RegistryError, promotion_gate
+from tripduration.registry import (
+    ChampionState,
+    Gate,
+    RegistryError,
+    ReleaseFiles,
+    promotion_gate,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CENTROIDS = ROOT / "tests" / "fixtures" / "zone_centroids.csv"
@@ -133,8 +139,12 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
             for name in ("model.pkl", "fallback_table.parquet"):
                 mlflow.log_artifact(str(tiny_artefacts / name), artifact_path="models")
             src = f"{run.info.artifact_uri}/models"
+        real = {
+            "model_md5": reg.file_md5(tiny_artefacts / "model.pkl"),
+            "fallback_md5": reg.file_md5(tiny_artefacts / "fallback_table.parquet"),
+        }
         mv = client.create_model_version(
-            MODEL, source=src, run_id=run.info.run_id, tags=_tags(**tags)
+            MODEL, source=src, run_id=run.info.run_id, tags=_tags(**{**real, **tags})
         )
         return int(mv.version)
 
@@ -146,6 +156,12 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
         "log": tmp_path / "promotions.md",
         "meta": tmp_path / "champion_meta.json",
         "fixture": tmp_path / "champion_fixture.csv",
+        "files": ReleaseFiles(
+            champion=tmp_path / "champion.json",
+            meta=tmp_path / "champion_meta.json",
+            fixture=tmp_path / "champion_fixture.csv",
+            log=tmp_path / "promotions.md",
+        ),
     }
 
 
@@ -154,10 +170,7 @@ def _rollback(r: dict[str, Any], **kw: Any) -> ChampionState:
         r["uri"],
         reason=kw.pop("reason", "test"),
         model_name=MODEL,
-        champion_file=r["file"],
-        log_path=r["log"],
-        meta_file=r["meta"],
-        fixture_file=r["fixture"],
+        files=r["files"],
         **kw,
     )
 
@@ -168,10 +181,7 @@ def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
         v,
         reason=kw.pop("reason", "test"),
         model_name=MODEL,
-        champion_file=r["file"],
-        log_path=r["log"],
-        meta_file=r["meta"],
-        fixture_file=r["fixture"],
+        files=r["files"],
         **kw,
     )
 
@@ -311,3 +321,208 @@ def test_promote_never_writes_repo_champion_files(registry: dict[str, Any]) -> N
         assert (p.read_bytes() if p.exists() else None) == content, (
             f"{p} was modified by a test"
         )
+
+
+# --- the release transaction: every intermediate state is recoverable ----------------
+
+PREPARE_FAILURES = ["download", "fixture", "prepared"]
+COMMITTED_STEPS = [
+    "journaled",
+    "alias:champion",
+    "alias:challenger",
+    "install:champion",
+    "install:meta",
+    "install:fixture",
+    "install:log",
+]
+
+
+def _snapshot(r: dict[str, Any]) -> dict[str, Any]:
+    """Everything a promotion changes: both aliases and the four files."""
+    return {
+        "champion": reg.resolve_alias(r["client"], "champion", MODEL),
+        "challenger": reg.resolve_alias(r["client"], "challenger", MODEL),
+        **{
+            key: path.read_bytes() if path.exists() else None
+            for key, path in r["files"].items()
+        },
+    }
+
+
+def _two_versions_promoted_first(r: dict[str, Any]) -> tuple[int, int]:
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1, reason="first")
+    return v1, v2
+
+
+class CrashError(Exception):
+    pass
+
+
+def _crash_at(monkeypatch: pytest.MonkeyPatch, step: str) -> None:
+    def cp(name: str) -> None:
+        if name == step:
+            raise CrashError(step)
+
+    monkeypatch.setattr(reg, "_checkpoint", cp)
+
+
+def _crash_in_prepare(monkeypatch: pytest.MonkeyPatch, where: str) -> None:
+    if where == "download":
+
+        def bad(*a: Any, **k: Any) -> Any:
+            raise CrashError("artifact store unreachable")
+
+        monkeypatch.setattr(reg, "_download_version", bad)
+    elif where == "fixture":
+
+        def bad_fixture(*a: Any, **k: Any) -> str:
+            raise CrashError("disk full")
+
+        monkeypatch.setattr(reg, "save_champion_fixture", bad_fixture)
+    else:
+        _crash_at(monkeypatch, where)
+
+
+@pytest.fixture
+def crash() -> Any:
+    """A MonkeyPatch of its own for failure injection, so ``crash.undo()``
+    removes only the injected failure, never the autouse fixtures' patches."""
+    mp = pytest.MonkeyPatch()
+    yield mp
+    mp.undo()
+
+
+@pytest.mark.parametrize("where", PREPARE_FAILURES)
+def test_failure_before_commit_changes_nothing(
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, where: str
+) -> None:
+    """The reported defect: the alias moved, then fixture generation failed."""
+    r = registry
+    _v1, v2 = _two_versions_promoted_first(r)
+    before = _snapshot(r)
+    _crash_in_prepare(crash, where)
+    with pytest.raises(CrashError):
+        _promote(r, v2)
+    assert _snapshot(r) == before
+    assert not r["files"].staging.exists()
+    crash.undo()
+    _promote(r, v2)  # and nothing is left in the way of a retry
+    assert reg.resolve_alias(r["client"], "champion", MODEL) == v2
+
+
+def test_artefact_md5_mismatch_is_refused_before_anything_changes(
+    registry: dict[str, Any],
+) -> None:
+    r = registry
+    _v1, _ = _two_versions_promoted_first(r)
+    bad = r["add"](mae_test_model=4.4, model_md5="0" * 32)
+    before = _snapshot(r)
+    with pytest.raises(RegistryError, match="model.pkl md5"):
+        _promote(r, bad)
+    assert _snapshot(r) == before
+
+
+@pytest.mark.parametrize("step", COMMITTED_STEPS)
+@pytest.mark.parametrize("op", ["promote", "rollback"])
+def test_interrupted_operation_blocks_then_recovers(
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, step: str, op: str
+) -> None:
+    r = registry
+    v1, v2 = _two_versions_promoted_first(r)
+    if op == "rollback":
+        _promote(r, v2)
+    # the state an uninterrupted run produces, from an identical registry
+    _crash_at(crash, step)
+    with pytest.raises(CrashError):
+        _promote(r, v2) if op == "promote" else _rollback(r, reason="x")
+    crash.undo()
+
+    # while the journal exists nothing else may run
+    with pytest.raises(RegistryError, match="interrupted"):
+        _promote(r, v1, force=True)
+    with pytest.raises(RegistryError, match="interrupted"):
+        _rollback(r, reason="y")
+
+    reg.recover(r["uri"], files=r["files"])
+    target = v2 if op == "promote" else v1
+    other = v1 if op == "promote" else v2
+    assert reg.resolve_alias(r["client"], "champion", MODEL) == target
+    assert reg.resolve_alias(r["client"], "challenger", MODEL) == other
+    state = ChampionState.read(r["files"].champion)
+    assert state is not None and state.version == target
+    reg.check_consistent(r["client"], state, MODEL, r["files"])  # all agree
+    assert r["log"].read_text().count(f"| {op} |") == 1 + (op == "promote")
+    assert not r["files"].staging.exists()
+
+
+@pytest.mark.parametrize("step", COMMITTED_STEPS)
+def test_interrupted_operation_aborts_to_the_exact_prior_state(
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, step: str
+) -> None:
+    r = registry
+    _v1, v2 = _two_versions_promoted_first(r)
+    before = _snapshot(r)
+    _crash_at(crash, step)
+    with pytest.raises(CrashError):
+        _promote(r, v2)
+    crash.undo()
+    reg.abort(r["uri"], files=r["files"])
+    assert _snapshot(r) == before
+    assert not r["files"].staging.exists()
+
+
+def test_recover_is_idempotent_when_itself_interrupted(
+    registry: dict[str, Any], crash: pytest.MonkeyPatch
+) -> None:
+    r = registry
+    _v1, v2 = _two_versions_promoted_first(r)
+    _crash_at(crash, "alias:challenger")
+    with pytest.raises(CrashError):
+        _promote(r, v2)
+    _crash_at(crash, "install:fixture")
+    with pytest.raises(CrashError):
+        reg.recover(r["uri"], files=r["files"])
+    crash.undo()
+    reg.recover(r["uri"], files=r["files"])
+    state = ChampionState.read(r["files"].champion)
+    assert state is not None and state.version == v2
+    reg.check_consistent(r["client"], state, MODEL, r["files"])
+
+
+def test_crash_after_journal_removed_leaves_a_consistent_release(
+    registry: dict[str, Any], crash: pytest.MonkeyPatch
+) -> None:
+    """Staging left behind without a journal was never needed: the next
+    operation clears it and proceeds."""
+    r = registry
+    v1, v2 = _two_versions_promoted_first(r)
+    _crash_at(crash, "journal_removed")
+    with pytest.raises(CrashError):
+        _promote(r, v2)
+    crash.undo()
+    state = ChampionState.read(r["files"].champion)
+    assert state is not None and state.version == v2
+    reg.check_consistent(r["client"], state, MODEL, r["files"])
+    _rollback(r, reason="works")
+    assert reg.resolve_alias(r["client"], "champion", MODEL) == v1
+
+
+def test_fixture_that_disagrees_with_the_record_is_refused(
+    registry: dict[str, Any],
+) -> None:
+    r = registry
+    _v1, v2 = _two_versions_promoted_first(r)
+    r["fixture"].write_text("edited by hand\n")
+    with pytest.raises(RegistryError, match="fixture_sha256"):
+        _promote(r, v2)
+    reg.refresh(r["uri"], model_name=MODEL, files=r["files"])  # the repair
+    _promote(r, v2)
+
+
+def test_recover_and_abort_refuse_without_a_journal(registry: dict[str, Any]) -> None:
+    with pytest.raises(RegistryError, match="no interrupted"):
+        reg.recover(registry["uri"], files=registry["files"])
+    with pytest.raises(RegistryError, match="no interrupted"):
+        reg.abort(registry["uri"], files=registry["files"])

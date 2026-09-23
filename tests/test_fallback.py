@@ -111,3 +111,28 @@ def test_predict_never_nan_for_any_valid_zone_pair(ref: ReferenceData) -> None:
     )
     pred, _ = fb.predict(req, ref)
     assert np.isfinite(pred).all() and (pred > 0).all()
+
+
+def test_version_changes_when_bucket_edges_change(ref: ReferenceData) -> None:
+    """Same medians read through different hour-bucket edges predict different
+    durations, so they must not share a version."""
+    rows = [(132, 230, datetime(2024, 10, 1, 8, i), 30.0) for i in range(6)]
+    rows += [(132, 230, datetime(2024, 10, 1, 22, i), 10.0) for i in range(6)]
+    train = pd.DataFrame(rows, columns=[PU, DO, DEPARTURE, TARGET])
+    fb = FallbackTable.fit(train, ref, EDGES, min_count=5)  # buckets 1 and 4
+    other = FallbackTable(table=fb.table, edges=(0, 12, 24), min_count=5)
+    req = pd.DataFrame(
+        {PU: [132], DO: [230], DEPARTURE: pd.to_datetime(["2024-11-05 22:15"])}
+    )
+    # EDGES: 22h is bucket 4 (median 10); (0,12,24): bucket 1, the 8h cell (30)
+    assert fb.predict(req, ref)[0][0] == 10.0
+    assert other.predict(req, ref)[0][0] == 30.0
+    assert fb.version != other.version
+
+
+def test_version_is_stable_across_save_and_load(
+    tmp_path: Path, ref: ReferenceData
+) -> None:
+    fb = FallbackTable.fit(_train(), ref, EDGES, min_count=5)
+    fb.save(tmp_path / "fb.parquet")
+    assert FallbackTable.load(tmp_path / "fb.parquet").version == fb.version

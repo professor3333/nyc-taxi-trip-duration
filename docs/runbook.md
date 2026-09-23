@@ -31,6 +31,18 @@ git add models/champion.json docs/promotions.md && git commit -m "Roll back cham
 ```
 `deploy.yml` redeploys the previous version; `/health.model_version` must show it. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s) and push — the deploy needs only the file and the DVC remote.
 
+## Interrupted promote / rollback / refresh
+
+`promote.py` works as one transaction: it verifies the version's artefacts (md5 vs registered tags), builds every new file in `models/.promotion/staged/`, copies the current files aside, and writes `models/.promotion/journal.json`. Only then does it move the aliases and rename the staged files into place. So:
+
+- **It failed before the journal** (artifact store unreachable, md5 mismatch, fixture generation failed): nothing changed. Fix the cause and re-run the same command.
+- **It failed after the journal** (registry went away mid-alias, crash while installing files): every `promote.py` command now refuses and names the interrupted operation. Choose one:
+  - `make promote-recover` finishes it (idempotent; safe to run again if it is interrupted too), then commit the four files as usual.
+  - `make promote-abort` puts both aliases and all four files back exactly as they were before the operation.
+- `make registry-status` shows the journal under `interrupted` while one exists.
+
+Never delete `models/.promotion/` by hand while a journal is in it: it holds the only copy of the pre-operation files.
+
 ## Service down or degraded (`monitor.yml` issue, CloudWatch alarm)
 
 1. `curl $FUNCTION_URL/health` — `status`, `model_version`, `load_error`.
