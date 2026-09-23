@@ -80,6 +80,36 @@ interactive use by the account owner. If the account restriction lifts,
 unreserved. The account limit is itself the cap, which is what the
 reservation was for; `deploy/aws/lambda.sh` now logs this and continues.
 
+## Amendment, 2026-09-23 — the scripts reproduce the deployment
+
+**Working values are the committed defaults.** `deploy/aws/env.sh` now
+defaults to 3008 MB / 60 s (it still said 1024 / 30, so a fresh `lambda.sh`
+would have recreated the function that never started). `lambda.sh` also
+reconciles an *existing* function with env.sh instead of only updating its
+code: memory, timeout, role, environment, image, Function URL auth type and
+the URL's resource-policy statements are compared with AWS, each difference
+is logged (`config drift: memory 1024 -> 3008`) and corrected, and a run with
+no drift changes nothing. Switching `LAMBDA_URL_AUTH_TYPE` revokes the other
+mode's grants, so going back to `AWS_IAM` never leaves a public grant behind.
+`tests/test_lambda_sh.py` runs the real script against a stateful fake `aws`
+(create, update, both auth switches, no-op, new image); all seven fail
+against the previous script. `deploy/aws/drill_lambda.sh` runs the same
+sequence against a scratch function in the real account and deletes it.
+
+**Probable cause of 2 and 2b: a missing permission, not an account block.**
+Since October 2025, invoking a Function URL needs **both**
+`lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` (the second scoped with
+`lambda:InvokedViaFunctionUrl`) — see the Lambda guide "Control access to
+Lambda function URLs". The live function's policy had only
+`InvokeFunctionUrl`, which explains every observation above: root bypasses
+resource policies, the simulator was asked about `InvokeFunctionUrl` alone,
+and `--invoke` succeeds because it uses the identity policy's
+`InvokeFunction`. `lambda.sh` now grants both (`github-actions-url` +
+`github-actions-invoke`, or `public-url` + `public-invoke` for `NONE`).
+**Not yet verified live:** the drill and the reconcile run on the serving
+function have not been executed (they add a resource-policy grant, which
+needs the owner's go-ahead). Until verified, CI keeps using `--invoke`.
+
 ## Consequences
 
 - The 900 MB image is the main cold-start cost; slimming (no pyarrow at

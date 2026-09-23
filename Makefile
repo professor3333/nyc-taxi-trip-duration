@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -74,6 +74,9 @@ docker-build-champion: ## Fetch champion artefacts from the DVC remote and build
 	  --build-arg GIT_SHA=$$(git rev-parse HEAD) \
 	  --build-arg MODEL_VERSION=v$$(uv run python -c "import json;print(json.load(open('models/champion.json'))['version'])") \
 	  -t tripduration:champion .
+
+lambda-drill: ## Prove lambda.sh creates AND reconciles, on a scratch function it deletes: make lambda-drill IMAGE=<ecr uri@sha256:...>
+	deploy/aws/drill_lambda.sh $(IMAGE)
 
 docker-run:   ## Run the image on :8080
 	docker run --rm -p 8080:8080 tripduration:dev

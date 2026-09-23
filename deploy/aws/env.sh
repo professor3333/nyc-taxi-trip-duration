@@ -24,8 +24,13 @@ export GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-$(gh api "users/$GITHUB_OWNER" --jq .
 export GITHUB_REPO_ID="${GITHUB_REPO_ID:-$(gh api "repos/$GITHUB_REPO" --jq .id 2>/dev/null || echo '*')}"
 export BUDGET_EMAIL="${BUDGET_EMAIL:?set BUDGET_EMAIL to the address that receives budget and alarm mail}"
 export LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-14}"
-export LAMBDA_MEMORY_MB="${LAMBDA_MEMORY_MB:-1024}"
-export LAMBDA_TIMEOUT_S="${LAMBDA_TIMEOUT_S:-30}"
+# 3008 MB / 60 s are the measured working values (ADR-0008 amendment): at
+# 1024 MB / 30 s init never finished - CPU scales with memory.
+export LAMBDA_MEMORY_MB="${LAMBDA_MEMORY_MB:-3008}"
+export LAMBDA_TIMEOUT_S="${LAMBDA_TIMEOUT_S:-60}"
+# Compact JSON, sorted keys: lambda.sh compares it with the live value.
+DEFAULT_LAMBDA_ENV_JSON='{"LOG_LEVEL":"INFO","OMP_NUM_THREADS":"2"}'
+export LAMBDA_ENV_JSON="${LAMBDA_ENV_JSON:-$DEFAULT_LAMBDA_ENV_JSON}"
 export LAMBDA_RESERVED_CONCURRENCY="${LAMBDA_RESERVED_CONCURRENCY:-5}"
 # AWS_IAM: this account blocks public function URLs (ADR-0008 amendment 2026-09-22).
 export LAMBDA_URL_AUTH_TYPE="${LAMBDA_URL_AUTH_TYPE:-AWS_IAM}"
