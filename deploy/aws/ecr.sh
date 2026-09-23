@@ -15,6 +15,10 @@ fi
 # and <sha>) and updates Lambda by digest.
 aws ecr put-image-tag-mutability --repository-name "$ECR_REPOSITORY" \
   --image-tag-mutability IMMUTABLE >/dev/null
+# Reconciled on every run, not only at creation: a repository whose scanning
+# was switched off (or created by hand) is switched back on.
+aws ecr put-image-scanning-configuration --repository-name "$ECR_REPOSITORY" \
+  --image-scanning-configuration scanOnPush=true >/dev/null
 aws ecr put-lifecycle-policy --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text '{
   "rules": [{"rulePriority": 1, "description": "keep last 5", "selection": {"tagStatus": "any",
              "countType": "imageCountMoreThan", "countNumber": 5}, "action": {"type": "expire"}}]}' >/dev/null

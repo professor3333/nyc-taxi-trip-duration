@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared settings for every deploy/aws/*.sh. Source, don't run.
 # Override any value in the environment before sourcing.
 set -euo pipefail

@@ -60,7 +60,11 @@ upsert_gha_role() {  # name  oidc-context  policy-file
 
 if [ "${1:-}" = "--retire-legacy" ]; then
   aws iam delete-role-policy --role-name "$GH_OIDC_ROLE_NAME" --policy-name "${PROJECT}-deploy" 2>/dev/null || true
-  aws iam delete-role --role-name "$GH_OIDC_ROLE_NAME" 2>/dev/null && log "deleted legacy role $GH_OIDC_ROLE_NAME" || log "no legacy role"
+  if aws iam delete-role --role-name "$GH_OIDC_ROLE_NAME" 2>/dev/null; then
+    log "deleted legacy role $GH_OIDC_ROLE_NAME"
+  else
+    log "no legacy role"
+  fi
   exit 0
 fi
 

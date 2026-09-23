@@ -1,0 +1,4 @@
+# Known vulnerabilities accepted in the NON-runtime groups (train, dev), one
+# ID per line: "<id>  <package>  <reason>  <review by>". The runtime set (what
+# the image ships) is audited with no ignores at all; see Makefile `audit`.
+PYSEC-2026-2447  diskcache 5.6.3 (via dvc-data)  pickle RCE needs write access to the local DVC cache dir, which only the owner/runner has; no fixed version exists  review-by 2026-12-31

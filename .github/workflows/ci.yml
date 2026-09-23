@@ -35,6 +35,16 @@ jobs:
       - name: Lint (ruff check, ruff format --check, mypy)
         run: make lint
 
+      # Shell scripts deploy real infrastructure and workflows run with cloud
+      # credentials; a quoting bug in either is found here, not in production.
+      - name: Shell and workflow lint (shellcheck, actionlint)
+        # Both pinned by digest, same as `make lint-infra`: the runner's own
+        # shellcheck (0.9.0) disagrees with 0.11.0 on `a && b || true`.
+        run: make lint-infra
+
+      - name: Dependency vulnerability audit (runtime strict, other groups vs accepted list)
+        run: scripts/audit.sh
+
       # Called out separately because it is the check that matters most: the
       # offline pipeline and POST /predict must agree to 1e-9 on the same
       # rows, and the API must refuse a model whose feature list differs.
@@ -50,6 +60,11 @@ jobs:
 
       - name: Train on the fixture months (no full data, no network)
         run: uv run pytest -q tests/test_pipeline.py
+
+      # The committed dvc.yaml, executed: every stage's own command, a fresh
+      # environment from uv.lock, quality blocking and exact invalidation.
+      - name: Actual DVC graph on the fixture months (dvc repro)
+        run: uv run pytest -q -m slow tests/test_dvc_repro.py
 
       # The canonical training environment (Dockerfile `train` target) must
       # build and run the pipeline, or the scheduled retrain breaks unseen.
@@ -73,10 +88,20 @@ jobs:
             --build-arg MODEL_VERSION=ci \
             -t tripduration:ci .
 
+      # The image that would ship: OS packages and Python wheels. Fails on any
+      # CRITICAL/HIGH finding that has a fix (an unfixed one cannot be acted on,
+      # and is reported by ECR scan-on-push). deploy.yml runs the same gate on
+      # the release image before Lambda is touched.
+      - name: Image vulnerability scan (trivy)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --quiet --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 tripduration:ci
+
       - name: Container smoke (/health, /ready, /predict, malformed -> 422)
         run: |
           docker run -d --name api -p 8080:8080 tripduration:ci
-          for i in $(seq 1 30); do curl -sf localhost:8080/health && break; sleep 1; done
+          for _ in $(seq 1 30); do curl -sf localhost:8080/health && break; sleep 1; done
           uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --models-dir build/ci-models --reference-dir tests/fixtures
           docker logs api | tail -5
           docker rm -f api
@@ -87,7 +112,7 @@ jobs:
       - name: Cold-start check (positive and negative)
         run: |
           docker run -d --name cold -p 8080:8080 tripduration:ci
-          for i in $(seq 1 60); do docker logs cold 2>&1 | grep -q "Application startup complete" && break; sleep 1; done
+          for _ in $(seq 1 60); do docker logs cold 2>&1 | grep -q "Application startup complete" && break; sleep 1; done
           uv run python scripts/deploy_check.py --url http://localhost:8080 --cold --latency-samples 5 --evidence cold.json
           jq -e '.cold.body.requests_before == 0' cold.json
           if uv run python scripts/deploy_check.py --url http://localhost:8080 --cold > warm.txt; then
@@ -95,3 +120,27 @@ jobs:
           fi
           grep -q "FAIL  cold: fresh process" warm.txt
           docker rm -f cold
+
+      # Backup and restore of the registry, for real: Postgres + MLflow from
+      # compose.yaml, two versions with aliases, backup, restore into a
+      # scratch project, compare. The negative control must fail on the
+      # alias mismatch specifically - a restore that merely failed to start
+      # would also exit 1 and prove nothing (observed locally: an OOM).
+      - name: Registry backup and restore drill
+        env:
+          MLFLOW_PORT: "5098"
+          API_PORT: "8098"
+        run: |
+          docker compose -p drill-src up -d --wait postgres mlflow
+          uv run python scripts/seed_registry.py --models build/ci-models --tracking-uri http://localhost:5098
+          uv run python scripts/registry_backup.py --project drill-src --tracking-uri http://localhost:5098 --out-dir drill
+          docker compose -p drill-src down -v
+          B=$(find drill -mindepth 1 -maxdepth 1 -type d | head -1)
+          uv run python scripts/registry_restore.py --from "$B" --check
+          cp -r "$B" tampered
+          jq '.state.aliases.champion = "1"' "$B/manifest.json" > tampered/manifest.json
+          if uv run python scripts/registry_restore.py --from tampered --check > tampered.txt 2>&1; then
+            echo "::error::a tampered backup verified"; cat tampered.txt; exit 1
+          fi
+          grep -q "FAIL aliases" tampered.txt || { echo "::error::tampered restore failed for another reason"; cat tampered.txt; exit 1; }
+
