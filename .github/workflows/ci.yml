@@ -38,11 +38,9 @@ jobs:
       # Shell scripts deploy real infrastructure and workflows run with cloud
       # credentials; a quoting bug in either is found here, not in production.
       - name: Shell and workflow lint (shellcheck, actionlint)
-        run: |
-          shellcheck --version | head -2
-          shellcheck deploy/aws/*.sh scripts/*.sh
-          docker run --rm -v "$PWD:/repo" -w /repo \
-            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -no-color
+        # Both pinned by digest, same as `make lint-infra`: the runner's own
+        # shellcheck (0.9.0) disagrees with 0.11.0 on `a && b || true`.
+        run: make lint-infra
 
       - name: Dependency vulnerability audit (runtime strict, other groups vs accepted list)
         run: scripts/audit.sh

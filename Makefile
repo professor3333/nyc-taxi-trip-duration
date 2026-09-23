@@ -3,9 +3,13 @@
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
 
-lint-infra:   ## shellcheck every script, actionlint every workflow (both also run in CI)
-	shellcheck deploy/aws/*.sh scripts/*.sh
-	actionlint
+SHELLCHECK_IMAGE := koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+ACTIONLINT_IMAGE := rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+lint-infra:   ## shellcheck every script, actionlint every workflow (pinned images; CI runs this)
+	docker run --rm -v "$$PWD:/mnt" -w /mnt $(SHELLCHECK_IMAGE) --version | sed -n 2p
+	docker run --rm -v "$$PWD:/mnt" -w /mnt $(SHELLCHECK_IMAGE) deploy/aws/*.sh scripts/*.sh
+	docker run --rm -v "$$PWD:/repo" -w /repo $(ACTIONLINT_IMAGE) -no-color
 
 audit:        ## Dependency vulnerabilities from uv.lock: runtime strict, other groups vs security/pip-audit-ignore.txt
 	scripts/audit.sh
