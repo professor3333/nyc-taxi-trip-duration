@@ -43,6 +43,17 @@ log = logging.getLogger(__name__)
 MODEL_FILE = "model.pkl"
 FALLBACK_FILE = "fallback_table.parquet"
 META_FILE = "model_meta.json"
+# The params.yaml keys this stage reads - identical to its `params:` list in
+# dvc.yaml (tests/test_dvc_deps.py). params_hash covers exactly these, so the
+# recorded hash changes if and only if DVC re-runs train for a params change.
+TRAIN_PARAM_KEYS = (
+    "seed",
+    "n_threads",
+    "fallback",
+    "model",
+    "mlflow",
+    "data.reference_dir",
+)
 
 
 def environment() -> dict[str, Any]:
@@ -89,7 +100,15 @@ def git_sha() -> str:
 
 
 def params_hash(params: Params) -> str:
-    blob = json.dumps(params.raw, sort_keys=True).encode()
+    """Hash of the training params (TRAIN_PARAM_KEYS), not all of params.yaml:
+    an `api` or `monitoring` edit must not change train's output unseen."""
+    picked: dict[str, Any] = {}
+    for key in TRAIN_PARAM_KEYS:
+        value: Any = params.raw
+        for part in key.split("."):
+            value = value[part]
+        picked[key] = value
+    blob = json.dumps(picked, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
@@ -273,7 +292,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     params = load_params(args.params)
-    os.environ.setdefault("OMP_NUM_THREADS", str(params.n_threads))
+    # params.n_threads is authoritative: an inherited OMP_NUM_THREADS would be
+    # an undeclared input (thread count can change float summation order).
+    inherited = os.environ.get("OMP_NUM_THREADS")
+    if inherited not in (None, str(params.n_threads)):
+        log.warning(
+            "OMP_NUM_THREADS=%s from the environment overridden by n_threads=%d",
+            inherited,
+            params.n_threads,
+        )
+    os.environ["OMP_NUM_THREADS"] = str(params.n_threads)
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
     ref = ReferenceData.load(
         params.data.reference_dir / "zone_centroids.csv", args.holidays

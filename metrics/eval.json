@@ -4,9 +4,9 @@
     "model_min_sum": 2058.53358,
     "rows": 80
   },
-  "git_sha": "8464be987aa70274d278bb26e7f2d8b6b420bbe0",
+  "git_sha": "019c42d9b8925e71153c429e6f5ca9bbdc76310a",
   "model_beats_fallback_on_test": true,
-  "params_hash": "2ea9cd9afc1ea1ae",
+  "params_hash": "4399ca8445b04f56",
   "test": {
     "fallback": {
       "bias": -0.3801282174233708,
