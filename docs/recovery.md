@@ -191,8 +191,11 @@ registered.
 
 **Overlap prevented** (runs `35763985452` and `35763998622`, fired 7 seconds
 apart): the second sat at `pending` while the first was `in_progress`, then
-ran. `cancel-in-progress: false` means a queued week is delayed, never
-dropped.
+ran. `cancel-in-progress: false` keeps the running one alive. **Correction
+(2026-09-23):** GitHub holds only one *pending* run per concurrency group, so
+a third run cancels the pending second (observed: `35813964651` cancelled).
+The scheduled run loses nothing — `plan` re-derives the next month from
+current state — but a dispatched specific month can be dropped.
 
 **A gap is refused in 22 seconds, not after a download.** Dispatching
 `2025-03` while `2025-02` is still an unmerged candidate branch first cost a
@@ -209,8 +212,9 @@ Ingest 2025-02 first, or merge the candidate PR that already contains it.
 
 `retrain.yml` runs **Mondays 09:00 UTC** and on dispatch. `concurrency: {group: retrain,
 cancel-in-progress: false}` means a second run queues rather than racing on the
-same branch, DVC remote and `dvc.lock` — and queues rather than being
-cancelled, so a genuinely new month is never dropped. When TLC has not
+same branch, DVC remote and `dvc.lock`. At most one run waits; a newer one
+replaces it (see the correction above), which is safe because `plan` works
+from current state rather than from what the cancelled run intended. When TLC has not
 published the next month the ingest step exits 0 and the job stops before
 validating anything:
 
