@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read     # freshness.py reads retrain.yml's job results
   id-token: write   # the Function URL uses AWS_IAM auth (ADR-0008 amendment)
 
 # Explicit `shell: bash` runs steps with `-eo pipefail`. The implicit default
@@ -52,9 +53,12 @@ jobs:
         run: |
           URL=$(aws lambda get-function-url-config --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
             --query FunctionUrl --output text)
+          # End to end from outside AWS: 10 warm /predict calls over the real
+          # network path, p95 enforced and published as E2ELatencyMs.
           uv run python scripts/deploy_check.py --url "$URL" --sigv4 \
             --expect-version "v$(jq -r .version models/champion.json)" \
-            --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee -a check.txt \
+            --expect-fixture models/champion_fixture.csv --malformed \
+            --latency-samples 10 --publish-metrics monitor 2>&1 | tee -a check.txt \
             || echo "failed=true" >> "$GITHUB_OUTPUT"
 
       - name: Open or update issue
@@ -72,6 +76,36 @@ jobs:
           else gh issue create --title "Service unhealthy" --body-file body.md --label service-health \
             || gh issue create --title "Service unhealthy" --body-file body.md; fi
           exit 1
+
+      # The service can be healthy while nothing behind it advances.
+      # Runs even when the service check failed; staleness is reported in its
+      # own issue and does not turn the run red (the issue is the alert).
+      - name: Freshness (data age, model age, last successful retrain)
+        id: fresh
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run python scripts/freshness.py --json freshness.json 2>&1 | tee fresh.txt \
+            || echo "stale=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open, update or close the freshness issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE: ${{ steps.fresh.outputs.stale }}
+        run: |
+          N=$(gh issue list --label freshness --state open --json number -q '.[0].number')
+          if [ "$STALE" = "true" ]; then
+            { echo "Freshness check on $(date -u +%FT%TZ):"; echo; echo '```'; cat fresh.txt; echo '```'
+              echo; echo "Thresholds: ADR-0011. Runbook: docs/runbook.md#stale-data-or-model"; } > fresh.md
+            if [ -n "$N" ]; then gh issue comment "$N" --body-file fresh.md
+            else gh label create freshness --color d93f0b --force >/dev/null
+                 gh issue create --title "Data or model is stale" --body-file fresh.md --label freshness; fi
+          elif [ -n "$N" ]; then
+            gh issue close "$N" --comment "Fresh again on $(date -u +%FT%TZ)."
+          fi
 
       - name: Close issue when healthy
         if: steps.check.outputs.failed != 'true' && steps.url.outputs.failed != 'true'

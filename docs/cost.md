@@ -19,11 +19,12 @@ list prices against **measured** quantities where they exist.
 | Lambda requests | $0.20/M | ~1k | < $0.01 |
 | Lambda compute (**3008 MB**, ~16 ms warm, ~24 s cold init) | $0.0000167/GB-s | ~1k warm + ~30 cold | < $0.02 (free tier covers) |
 | CloudWatch logs ingestion + 14-day storage | $0.50/GB ingested | < 10 MB | < $0.01 |
-| CloudWatch alarms (2) | $0.10/alarm | 2 | $0.20 |
+| CloudWatch alarms (14, since 2026-09-23) | $0.10/alarm-month after 10 free | 14 | $0.40 ($1.40 without the free tier) |
+| CloudWatch custom metrics (9 from filters + 3 from `deploy_check`) | $0.30/metric-month after 10 free | 12 | $0.60 |
 | SNS email | free tier | — | $0 |
 | Budgets (first two free) | — | 1 | $0 |
 | data transfer out | $0.09/GB after free 100 GB | ≈ 0 | $0 |
-| **total (est.)** | | | **≈ $0.35/month, of which ~60 % is ECR image storage and ~57 % of the rest is the two alarms** |
+| **total (est.)** | | | **≈ $1.15/month, of which ~87 % is monitoring (alarms $0.40 + custom metrics $0.60) and most of the rest is ECR storage** |
 
 Fill from Cost Explorer filtered by tag `project=nyc-taxi-trip-duration`
 (`make cost` — to be added when the account exists) at the start of each month.

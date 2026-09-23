@@ -400,6 +400,9 @@ def test_endpoint_table(client: TestClient) -> None:
         "train_months",
         "feature_count",
         "loaded_at",
+        "instance_id",
+        "process_started_at",
+        "requests_before",
     }
     assert v["model_kind"] == "model" and v["feature_count"] == 12
     assert v["fallback_version"].startswith("fb-")
@@ -482,6 +485,49 @@ def test_request_log_line_has_required_fields(model_dir: Path) -> None:
     )
     bad = [line for line in lines if line["status"] == 422]
     assert bad and bad[0]["model_kind"] is None
+
+
+def test_version_proves_whether_the_process_was_fresh(model_dir: Path) -> None:
+    """deploy_check --cold relies on this: requests_before == 0 means this
+    request was the first the execution environment served."""
+    with TestClient(create_app(_settings(model_dir))) as c:
+        first = c.get("/version").json()
+        c.post("/predict", json=GOOD)
+        later = c.get("/version").json()
+    with TestClient(create_app(_settings(model_dir))) as c:
+        other = c.get("/version").json()
+    assert first["requests_before"] == 0 and later["requests_before"] == 2
+    assert first["instance_id"] == later["instance_id"] != other["instance_id"]
+    assert other["requests_before"] == 0
+
+
+def test_batch_request_logs_a_prediction_summary(model_dir: Path) -> None:
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("tripduration.api.request")
+    logger.addHandler(handler)
+    items = [GOOD, {**GOOD, "dropoff_zone_id": 1}, {**GOOD, "pickup_zone_id": 100}]
+    try:
+        with TestClient(create_app(_settings(model_dir))) as c:
+            r = c.post("/predict/batch", json={"items": items})
+            c.post("/predict", json=GOOD)
+    finally:
+        logger.removeHandler(handler)
+    preds = r.json()["predictions"]
+    lines = [
+        json.loads(line)
+        for line in buf.getvalue().splitlines()
+        if '"event": "request"' in line
+    ]
+    batch = next(line for line in lines if line["path"] == "/predict/batch")
+    single = next(line for line in lines if line["path"] == "/predict")
+    assert batch["batch_size"] == 3
+    assert batch["batch_prediction_p50_min"] == round(sorted(preds)[1], 2)
+    assert batch["batch_prediction_max_min"] == max(preds)
+    assert batch["prediction_min"] is None  # never mixed into the single metric
+    assert single["prediction_min"] > 0 and single["batch_size"] is None
+    assert batch["process_request_index"] == 0 and single["process_request_index"] == 1
 
 
 # --- parity (G7) ----------------------------------------------------------------------

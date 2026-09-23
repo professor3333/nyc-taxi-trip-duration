@@ -141,6 +141,18 @@ def test_monitor_can_probe_but_change_nothing(roles: dict[str, Any]) -> None:
         "lambda:InvokeFunction",
         "lambda:InvokeFunctionUrl",
         "lambda:GetFunctionUrlConfig",
+        "cloudwatch:PutMetricData",
+    }
+    (put,) = [
+        st
+        for st in roles[ROLE.format("monitor")]["policies"][ROLE.format("monitor")][
+            "Statement"
+        ]
+        if st["Action"] == "cloudwatch:PutMetricData"
+    ]
+    # only into the project's namespace, never AWS/* or anyone else's
+    assert put["Condition"] == {
+        "StringEquals": {"cloudwatch:namespace": "nyc-taxi-trip-duration"}
     }
 
 

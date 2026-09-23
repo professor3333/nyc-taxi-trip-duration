@@ -33,3 +33,22 @@ real regime change; month-to-month variation of ±10 % is expected from
 seasonality alone (December vs November differed by 17 % on the same model).
 15 % on the *worse* side flags a change larger than seasonality without
 firing on every winter. Revisit after six prospective rows exist.
+
+
+## Amendment (2026-09-23): what was invisible, and the thresholds that now see it
+
+A review found seven gaps. Each has a threshold here and a proof in
+`docs/monitoring.md`.
+
+| gap | now | threshold |
+|---|---|---|
+| `--cold` measured calls after warm-ups | first request only, proven fresh by the app (`requests_before == 0`) **and** the platform (`Init Duration` in its REPORT line), evidence kept 90 days | ≤ 45 s end to end (ADR-0008: init ≈ 24 s; timeout 60 s) |
+| app latency misses init and the network | `UrlRequestLatency` at the edge; `E2ELatencyMs` from a runner | edge p95 45 s (cold starts are normal); outside p95 1500 ms warm |
+| app logs cannot see timeouts or init failures | `TimeoutCount`, `InitFailureCount` (platform text lines), `Errors`, `Throttles`, `Url5xxCount` | any occurrence in 5 min |
+| retraining can stall while the API is healthy | `freshness.py` in `monitor.yml` | data ≤ 5 months (worst TLC lag 3 + margin), model ≤ 8 months, last successful `train` ≤ 21 days (weekly schedule) |
+| batch predictions never reached the distribution | `BatchPredictionP50Min`, one summary per batch | same as single: p50 > 40 min for 3 h |
+| alert delivery never demonstrated | `alarm_drill.py`, and OK actions on every alarm | two deliveries per drill (ALARM, OK) |
+| `defaultValue=0` on value metrics | removed; counts keep it | — |
+
+The delivery gap was worse than described: the only subscription had been
+`PendingConfirmation` since 2026-09-22, so no alarm had ever reached anyone.

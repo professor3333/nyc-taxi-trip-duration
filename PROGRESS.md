@@ -228,3 +228,14 @@ Tick a line only when its proof command passes, not when the code is written.
 
   Workflows use `secrets.AWS_<ROLE>_ROLE_ARN || secrets.AWS_ROLE_ARN`, so nothing breaks before the owner runs the migration in the runbook. Proof: `tests/test_iam.py` has 15 tests, running the real `iam.sh` against a fake `aws`.
 - **Compose:** ports bound to `127.0.0.1`. Verified: loopback 200, LAN address refused (curl exit 7), and the training container still reaches MLflow via `host.docker.internal`.
+
+## Monitoring made to see what it missed — 2026-09-23 (ADR-0011 amendment)
+
+- **Cold start:** `--cold` measures the first request only, and fails unless the app (`requests_before == 0`) and the platform (`Init Duration` on that request's REPORT line) both say it was cold, or if it takes over 45 s. `deploy.yml` measures after every image change and keeps the evidence 90 days. CI proves the app side on each PR: a fresh container passes, the same container warm fails. Measured locally: fresh 96 ms / `requests_before=0`; warm rerun `requests_before=12` → FAIL, exit 1.
+- **Applied live** (`monitoring.sh`, split out of `lambda.sh`), 14 alarms, all with OK actions:
+  - platform: `Errors`, `Throttles`, `Url5xxCount`, `UrlRequestLatency`, and `Task timed out` / `INIT_REPORT` log patterns (checked with `TestMetricFilter`);
+  - outside-in: `E2ELatencyMs` and `ColdStartE2EMs` from `deploy_check`;
+  - `BatchPredictionMedianHigh` for batches;
+  - value metrics no longer default to 0.
+- **Freshness** (`scripts/freshness.py`, daily): red today on data (17 months) and model (22 months); retrain green (0.4 days).
+- **Alert delivery:** the only SNS subscription is still `PendingConfirmation`, so no alarm has ever reached anyone. `alarm_drill.py` (real ERROR line → alarm → email → OK → email) refuses to run until the owner confirms the email.

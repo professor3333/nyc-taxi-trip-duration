@@ -9,6 +9,7 @@
      "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration",
                 "lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]},
     {"Sid": "DvcReadChampion", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],
-     "Resource": ["arn:aws:s3:::S3_BUCKET", "arn:aws:s3:::S3_BUCKET/dvc/*"]}
+     "Resource": ["arn:aws:s3:::S3_BUCKET", "arn:aws:s3:::S3_BUCKET/dvc/*"]},
+    {"Sid": "PublishProbeMetrics", "Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*", "Condition": {"StringEquals": {"cloudwatch:namespace": "nyc-taxi-trip-duration"}}}
   ]
 }

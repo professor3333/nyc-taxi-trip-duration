@@ -65,7 +65,11 @@ def done(result=None):
     if query:
         result = jmespath.search(query, result)
     if output == "text":
-        print("\t".join(map(str, result)) if isinstance(result, list) else result)
+        # like the real CLI: a list of rows prints one tab-separated row per line
+        if isinstance(result, list) and result and isinstance(result[0], list):
+            print("\n".join("\t".join(map(str, row)) for row in result))
+        else:
+            print("\t".join(map(str, result)) if isinstance(result, list) else result)
     else:
         print(json.dumps(result))
     sys.exit(0)
@@ -146,7 +150,10 @@ if service == "sns":
     if op == "create-topic":
         done({"TopicArn": arn})
     if op == "list-subscriptions-by-topic":
-        done({"Subscriptions": [{"Endpoint": e} for e in state["subscribers"]]})
+        done({"Subscriptions": [
+            {"Endpoint": e, "SubscriptionArn": f"arn:aws:sns:us-east-1:1:t:{i}"}
+            for i, e in enumerate(state["subscribers"])
+        ]})
     if op == "subscribe":
         state["subscribers"].append(args["notification-endpoint"]); done({})
 fail(f"fake aws: unhandled {service} {op}")
@@ -296,3 +303,57 @@ def test_new_image_updates_code_only(aws) -> None:
     state, out = aws(IMAGE=IMAGE2)
     assert _mutations(state) == ["update-function-code"]
     assert state["function"]["code"]["ImageUri"] == IMAGE2
+
+
+# --- monitoring.sh (called by lambda.sh) -------------------------------------------
+
+
+def _calls(state: dict, op: str) -> list[dict]:  # type: ignore[type-arg]
+    return [args for name, args in state["calls"] if name == op]
+
+
+def test_value_metrics_emit_no_default_zeros(aws) -> None:
+    """A default is emitted for every non-matching line; for latency or
+    predicted minutes those zeros would drag the percentiles towards 0."""
+    state, _ = aws()
+    filters = {
+        c["filter-name"]: c["metric-transformations"]
+        for c in _calls(state, "put-metric-filter")
+    }
+    for value_metric in (
+        "LatencyMs",
+        "PredictionMin",
+        "BatchPredictionP50Min",
+    ):
+        assert "defaultValue" not in filters[value_metric], value_metric
+    for count in ("ErrorCount", "FallbackCount", "TimeoutCount", "InitFailureCount"):
+        assert filters[count].endswith("defaultValue=0"), count
+
+
+def test_platform_signals_are_alarmed(aws) -> None:
+    state, _ = aws()
+    alarms = {
+        c["alarm-name"].removeprefix("nyc-taxi-trip-duration-"): c
+        for c in _calls(state, "put-metric-alarm")
+    }
+    platform = {
+        "PlatformErrors": "Errors",
+        "Throttles": "Throttles",
+        "Url5xx": "Url5xxCount",
+        "UrlLatencyP95": "UrlRequestLatency",
+    }
+    for name, metric in platform.items():
+        a = alarms[name]
+        assert a["namespace"] == "AWS/Lambda" and a["metric-name"] == metric
+        assert a["dimensions"] == "Name=FunctionName,Value=nyc-taxi-trip-duration"
+    for name in (
+        "Timeouts",
+        "InitFailures",
+        "E2ELatencyP95",
+        "ColdStartE2E",
+        "BatchPredictionMedianHigh",
+    ):
+        assert name in alarms
+    # recovery is notified, not only failure
+    assert all(a["ok-actions"] == a["alarm-actions"] for a in alarms.values())
+    assert len(alarms) == 14

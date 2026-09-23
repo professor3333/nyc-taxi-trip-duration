@@ -138,6 +138,11 @@ class VersionResponse(BaseModel):
     train_months: list[str]
     feature_count: int
     loaded_at: str
+    # Which execution environment answered, and how many requests it had
+    # served before this one: 0 proves this request met a fresh process.
+    instance_id: str
+    process_started_at: str
+    requests_before: int
 
 
 class ErrorDetail(BaseModel):
