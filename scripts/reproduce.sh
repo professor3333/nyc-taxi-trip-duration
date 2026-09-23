@@ -2,8 +2,10 @@
 # Exit criterion 1: from a fresh clone of a commit, `dvc pull` + `dvc repro`
 # must reproduce **the predictions**, not merely the metrics, bit for bit.
 #
-#   make reproduce                 # HEAD
+#   make reproduce                 # HEAD, inputs from the DVC remote
 #   make reproduce REV=<sha>       # any commit
+#   make reproduce SOURCE=public   # inputs from TLC's public URLs: no DVC
+#                                  # remote and no AWS credentials needed
 #
 # What makes the assurance real (docs/reproducibility.md):
 # - Expected results are read from the git objects of the audited commit
@@ -16,12 +18,16 @@
 # - Predictions are stored unrounded and compared at tolerance 0; any NaN,
 #   inf or unparsable value fails.
 #
-# Prerequisites: git, uv, docker, and read access to the DVC remote named in
-# .dvc/config (or a .dvc/config.local pointing somewhere you can read).
+# Prerequisites: git, uv, docker; for SOURCE=remote (default) also read access
+# to the DVC remote named in .dvc/config (or a .dvc/config.local). With
+# SOURCE=public every input is rebuilt from TLC and must match its committed
+# .dvc pointer byte for byte (scripts/fetch_public_data.sh), so the rest of
+# the check is unchanged.
 set -euo pipefail
 
 REPO_DIR=$(git rev-parse --show-toplevel)
 SHA=$(git -C "$REPO_DIR" rev-parse "${REV:-HEAD}^{commit}")
+SOURCE=${SOURCE:-remote}
 TOLERANCE=${TOLERANCE:-0}
 PRED_TOLERANCE=${PRED_TOLERANCE:-0}
 WORK=$(mktemp -d -t reproduce.XXXXXX)
@@ -32,14 +38,19 @@ git clone -q "$REPO_DIR" "$WORK/clone"
 cd "$WORK/clone"
 git checkout -q --detach "$SHA"
 
-echo "== remote: reuse this machine's .dvc/config.local if it has one"
-if [ -f "$REPO_DIR/.dvc/config.local" ]; then
-  cp "$REPO_DIR/.dvc/config.local" .dvc/config.local
-fi
-
-echo "== dvc pull (host: needs the remote's credentials)"
 uv sync --frozen --group train -q
-uv run dvc pull -q
+if [ "$SOURCE" = "public" ]; then
+  echo "== inputs from TLC's public URLs (no DVC remote), checked against the pointers"
+  # from this checkout: the audited commit may predate the script
+  "$REPO_DIR/scripts/fetch_public_data.sh"
+else
+  echo "== remote: reuse this machine's .dvc/config.local if it has one"
+  if [ -f "$REPO_DIR/.dvc/config.local" ]; then
+    cp "$REPO_DIR/.dvc/config.local" .dvc/config.local
+  fi
+  echo "== dvc pull (host: needs the remote's credentials)"
+  uv run dvc pull -q
+fi
 
 echo "== dvc repro in the canonical training environment, no network"
 # MLflow logs to a throwaway sqlite file inside the clone (mounted at /work).

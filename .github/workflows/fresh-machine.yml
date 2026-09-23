@@ -1,0 +1,43 @@
+name: fresh-machine
+
+# The README's "From a fresh machine" block, executed verbatim on a clean
+# runner with NO cloud credentials: clone, setup, lint, test, and a
+# bit-identical reproduction from TLC's public data (no DVC remote). If the
+# documented commands stop working, this goes red - the README is tested, not
+# trusted. Weekly as well, so a TLC republish or a doc change is caught.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 2"   # Tuesdays, after Monday's retrain
+
+permissions:
+  contents: read            # no id-token: this machine has no AWS identity at all
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fresh-machine:
+    runs-on: ubuntu-latest  # 16 GB: the full-data pipeline needs more than a 4 GB VM
+    timeout-minutes: 120
+    steps:
+      # Only to read README.md; the block clones the repository itself.
+      - uses: actions/checkout@v5
+        with:
+          path: docs-src
+
+      # The README's stated prerequisites: git, docker and make are on the
+      # runner; uv is installed here, which is what the README asks for.
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Extract the README block
+        run: |
+          python3 docs-src/scripts/readme_block.py fresh-machine > fresh.sh
+          { echo '```bash'; cat fresh.sh; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run it exactly as written, in an empty directory
+        run: |
+          mkdir fresh && cd fresh
+          bash -euxo pipefail ../fresh.sh

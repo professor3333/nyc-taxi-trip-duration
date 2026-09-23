@@ -2,20 +2,45 @@
 
 ## Local loop (what a new machine reproduces)
 
+`main` is protected (a PR with green `ci` is required), so every change below goes through a branch and a PR. None of these steps push to `main`.
+
 ```
 make setup                       # uv sync incl. dvc, mlflow
-cp .env.example .env             # ports; S3 vars once the bucket exists
-make compose-up                  # postgres + mlflow (:5001) + api (:8080)
-uv run dvc pull                  # needs a remote: .dvc/config.local (dir) or .dvc/config (S3)
-make pipeline                    # dvc repro; MLFLOW_TRACKING_URI defaults to the compose server
-make register                    # new registry version from the committed outputs
-make promote VERSION=<n> REASON="..."
-git add models/champion.json docs/promotions.md && git commit && git push   # → deploy.yml
-make docker-build-champion && docker run --rm -p 8082:8080 tripduration:champion
-uv run python scripts/deploy_check.py --url http://localhost:8082 --expect-version v<n> --malformed
+cp .env.example .env             # ports and bind addresses (loopback)
+uv run dvc pull                  # needs read access to s3://nyc-taxi-trip-duration-560512681455/dvc
+                                 #   no access? scripts/fetch_public_data.sh rebuilds every input from TLC
+make compose-up                  # postgres + mlflow on :5001 (no model files needed)
+make compose-api                 # the API on :8080, built from models/ (needs the dvc pull above)
+uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed
+make pipeline                    # dvc repro in the canonical training env; MLflow on :5001
 ```
 
-## Deploy (once AWS exists)
+Then register and promote as in *Release a champion* below.
+
+## Release a champion (verified 2026-09-23, see PROGRESS)
+
+```
+make register                                        # only if the outputs are new; prints the version
+make promote VERSION=<n> REASON="<why>"              # ADR-0007 gate; writes the 4 release files
+make registry-backup                                 # the registry has no other copy
+git switch -c release/v<n>
+git add models/champion.json models/champion_meta.json models/champion_fixture.csv docs/promotions.md
+git commit -m "Promote v<n>: <why>"
+git push -u origin release/v<n>
+gh pr create --fill --base main
+gh pr checks --watch && gh pr merge --squash --delete-branch
+git switch main && git pull
+```
+
+The merge changes `models/champion.json` on `main`, which starts `deploy.yml`. Watch it, then check the live service yourself (signed; the URL is IAM-authenticated):
+
+```
+sleep 20; gh run watch "$(gh run list --workflow deploy.yml --event push --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
+URL=$(aws lambda get-function-url-config --function-name nyc-taxi-trip-duration --query FunctionUrl --output text)
+uv run python scripts/deploy_check.py --url "$URL" --sigv4 --expect-version v<n> --expect-fixture models/champion_fixture.csv --malformed
+```
+
+## Deploy (the first time; done 2026-09-22)
 
 1. `deploy/aws/budget.sh` first, then `s3.sh`, `ecr.sh`, `iam.sh` (see `deploy/README.md`).
 2. Switch DVC to S3: `uv run dvc remote add -d s3 s3://<bucket>/dvc`, commit `.dvc/config`, `uv run dvc push`.
@@ -29,13 +54,23 @@ If any check after the Lambda update fails, `deploy.yml` puts back the image tha
 
 A vulnerable release image never reaches Lambda: the Trivy gate (CRITICAL/HIGH with a fix) runs before the update.
 
-## Rollback
+## Rollback (model: back to `previous_version`) (verified 2026-09-23, see PROGRESS)
+
+The same path as a release, with `make rollback` in place of `make promote`:
 
 ```
-make rollback REASON="deploy_check failed on v<n>: <what>"
-git add models/champion.json docs/promotions.md && git commit -m "Roll back champion to v<n-1>" && git push
+make rollback REASON="<why>"                         # champion -> previous_version; writes the 4 files
+make registry-backup
+git switch -c rollback/v<m>                          # m = the version rolled back to
+git add models/champion.json models/champion_meta.json models/champion_fixture.csv docs/promotions.md
+git commit -m "Roll back champion to v<m>: <why>"
+git push -u origin rollback/v<m>
+gh pr create --fill --base main
+gh pr checks --watch && gh pr merge --squash --delete-branch
+git switch main && git pull
 ```
-`deploy.yml` redeploys the previous version; `/health.model_version` must show it. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s) and push — the deploy needs only the file and the DVC remote.
+
+Then watch `deploy.yml` and run the signed `deploy_check` exactly as in *Release*, with `--expect-version v<m>`. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s); the deploy needs only the file and the DVC remote. The companion files are then stale, so the deploy's fixture check will fail until `uv run python scripts/promote.py --refresh` can run, and the automatic restore puts the old image back. The manual edit is a last resort.
 
 ## Registry backup and restore
 
@@ -91,12 +126,12 @@ Never delete `models/.promotion/` by hand while a journal is in it: it holds the
 
 ## Service down or degraded (`monitor.yml` issue, CloudWatch alarm)
 
-1. `curl $FUNCTION_URL/health` — `status`, `model_version`, `load_error`.
+1. Signed, since the URL uses AWS_IAM auth (an unsigned `curl` gets 403 whatever the service's state): `uv run python scripts/deploy_check.py --url "$URL" --sigv4 --allow-degraded` prints `/health` (`status`, `model_version`, `load_error`) and every check. Bypassing the URL edge: `--invoke nyc-taxi-trip-duration` instead of `--url … --sigv4`.
 2. `degraded` + `load_error` → the image is bad: the artefacts in the DVC remote at the champion sha do not load. Roll back.
 3. `model_version` ≠ champion → the last deploy did not finish; re-run `deploy.yml`.
 4. 5xx → Logs Insights `filter level = "ERROR"` for the traceback; every line has `request_id`.
 5. `Timeouts` / `InitFailures` / `PlatformErrors` alarms: the app may never have run, so its own log has nothing. Use Logs Insights `filter @message like /Task timed out|INIT_REPORT|Runtime exited/`. Measure a cold start by hand with `uv run python scripts/deploy_check.py --url $URL --sigv4 --cold --function nyc-taxi-trip-duration --force-new-environment --evidence cold.json` (owner credentials: it changes an environment variable and restores it).
-6. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` (and/or `LAMBDA_TIMEOUT_S`) in `deploy/aws/env.sh`, re-run `deploy/aws/lambda.sh <live image uri>` — it applies configuration to the existing function and logs each change — then record in ADR-0008. Live image: `aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text`.
+6. Cold-start timeouts → raise `LAMBDA_MEMORY_MB` (and/or `LAMBDA_TIMEOUT_S`) in `deploy/aws/env.sh`, re-run `deploy/aws/lambda.sh <live image uri>` — it reconciles memory, timeout, environment, role and URL auth on the existing function and logs each change (`config drift: timeout 30 -> 60`; proven offline by `tests/test_lambda_sh.py::test_overridden_memory_and_timeout_apply_to_existing_function`) — then record in ADR-0008. Note that today's cold start is init hitting the 10 s limit (ADR-0008 amendment 2026-09-23), which more memory has not fixed. Live image: `aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text`.
 
 ## Retrain candidates: accept data, promote (or not) the model
 
