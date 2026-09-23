@@ -385,20 +385,29 @@ def _crash_in_prepare(monkeypatch: pytest.MonkeyPatch, where: str) -> None:
         _crash_at(monkeypatch, where)
 
 
+@pytest.fixture
+def crash() -> Any:
+    """A MonkeyPatch of its own for failure injection, so ``crash.undo()``
+    removes only the injected failure, never the autouse fixtures' patches."""
+    mp = pytest.MonkeyPatch()
+    yield mp
+    mp.undo()
+
+
 @pytest.mark.parametrize("where", PREPARE_FAILURES)
 def test_failure_before_commit_changes_nothing(
-    registry: dict[str, Any], monkeypatch: pytest.MonkeyPatch, where: str
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, where: str
 ) -> None:
     """The reported defect: the alias moved, then fixture generation failed."""
     r = registry
     _v1, v2 = _two_versions_promoted_first(r)
     before = _snapshot(r)
-    _crash_in_prepare(monkeypatch, where)
+    _crash_in_prepare(crash, where)
     with pytest.raises(CrashError):
         _promote(r, v2)
     assert _snapshot(r) == before
     assert not r["files"].staging.exists()
-    monkeypatch.undo()
+    crash.undo()
     _promote(r, v2)  # and nothing is left in the way of a retry
     assert reg.resolve_alias(r["client"], "champion", MODEL) == v2
 
@@ -418,17 +427,17 @@ def test_artefact_md5_mismatch_is_refused_before_anything_changes(
 @pytest.mark.parametrize("step", COMMITTED_STEPS)
 @pytest.mark.parametrize("op", ["promote", "rollback"])
 def test_interrupted_operation_blocks_then_recovers(
-    registry: dict[str, Any], monkeypatch: pytest.MonkeyPatch, step: str, op: str
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, step: str, op: str
 ) -> None:
     r = registry
     v1, v2 = _two_versions_promoted_first(r)
     if op == "rollback":
         _promote(r, v2)
     # the state an uninterrupted run produces, from an identical registry
-    _crash_at(monkeypatch, step)
+    _crash_at(crash, step)
     with pytest.raises(CrashError):
         _promote(r, v2) if op == "promote" else _rollback(r, reason="x")
-    monkeypatch.undo()
+    crash.undo()
 
     # while the journal exists nothing else may run
     with pytest.raises(RegistryError, match="interrupted"):
@@ -450,32 +459,32 @@ def test_interrupted_operation_blocks_then_recovers(
 
 @pytest.mark.parametrize("step", COMMITTED_STEPS)
 def test_interrupted_operation_aborts_to_the_exact_prior_state(
-    registry: dict[str, Any], monkeypatch: pytest.MonkeyPatch, step: str
+    registry: dict[str, Any], crash: pytest.MonkeyPatch, step: str
 ) -> None:
     r = registry
     _v1, v2 = _two_versions_promoted_first(r)
     before = _snapshot(r)
-    _crash_at(monkeypatch, step)
+    _crash_at(crash, step)
     with pytest.raises(CrashError):
         _promote(r, v2)
-    monkeypatch.undo()
+    crash.undo()
     reg.abort(r["uri"], files=r["files"])
     assert _snapshot(r) == before
     assert not r["files"].staging.exists()
 
 
 def test_recover_is_idempotent_when_itself_interrupted(
-    registry: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    registry: dict[str, Any], crash: pytest.MonkeyPatch
 ) -> None:
     r = registry
     _v1, v2 = _two_versions_promoted_first(r)
-    _crash_at(monkeypatch, "alias:challenger")
+    _crash_at(crash, "alias:challenger")
     with pytest.raises(CrashError):
         _promote(r, v2)
-    _crash_at(monkeypatch, "install:fixture")
+    _crash_at(crash, "install:fixture")
     with pytest.raises(CrashError):
         reg.recover(r["uri"], files=r["files"])
-    monkeypatch.undo()
+    crash.undo()
     reg.recover(r["uri"], files=r["files"])
     state = ChampionState.read(r["files"].champion)
     assert state is not None and state.version == v2
@@ -483,16 +492,16 @@ def test_recover_is_idempotent_when_itself_interrupted(
 
 
 def test_crash_after_journal_removed_leaves_a_consistent_release(
-    registry: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    registry: dict[str, Any], crash: pytest.MonkeyPatch
 ) -> None:
     """Staging left behind without a journal was never needed: the next
     operation clears it and proceeds."""
     r = registry
     v1, v2 = _two_versions_promoted_first(r)
-    _crash_at(monkeypatch, "journal_removed")
+    _crash_at(crash, "journal_removed")
     with pytest.raises(CrashError):
         _promote(r, v2)
-    monkeypatch.undo()
+    crash.undo()
     state = ChampionState.read(r["files"].champion)
     assert state is not None and state.version == v2
     reg.check_consistent(r["client"], state, MODEL, r["files"])
