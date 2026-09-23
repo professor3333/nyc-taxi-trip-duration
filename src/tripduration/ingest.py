@@ -210,6 +210,23 @@ def head(url: str, *, opener: Opener = _default_opener) -> RemoteInfo:
     )
 
 
+def is_published(
+    service: str,
+    month: str,
+    schema: RawSchema,
+    *,
+    opener: Opener = _default_opener,
+    sleep: Sleeper = time.sleep,
+) -> bool:
+    """HEAD only: has TLC published this month? Downloads and writes nothing."""
+    url = schema.trip_url_template.format(service=service, month=month)
+    try:
+        _with_retries(lambda: head(url, opener=opener), what=f"HEAD {url}", sleep=sleep)
+    except MonthNotPublishedError:
+        return False
+    return True
+
+
 def download(
     url: str, dest: Path, *, opener: Opener = _default_opener
 ) -> tuple[str, int]:

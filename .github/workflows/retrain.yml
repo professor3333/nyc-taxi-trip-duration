@@ -1,12 +1,21 @@
 name: retrain
 
-# Weekly: check whether TLC has published the next month. If not, exit green
-# without validating or training anything. If it has: ingest, re-run the
-# pipeline with the ADR-0003 window, evaluate the current champion
-# prospectively on that same month (historical replay - see docs/monitoring.md),
-# apply ADR-0007's gate to the candidate, and open a labelled candidate PR.
-# Registering and promoting stay human because the registry is local
-# (ADR-0004, ADR-0010). A `model-drift` issue opens if ADR-0011 is crossed.
+# Weekly: check whether TLC has published the next month. Two jobs:
+#
+#   plan  - read-only (contents/pull-requests: read, no AWS role). Works out the
+#           month, whether it is published, whether it is already on main or
+#           in an open candidate PR, which unmerged candidate data to carry,
+#           and whether to train. scripts/retrain_plan.py holds the logic and
+#           is unit-tested; this file only wires its outputs.
+#   train - runs only when plan says should_train=true: ingest, repro with the
+#           ADR-0003 window, prospective evaluation of the champion, the
+#           ADR-0007 gate, and a labelled candidate PR (created or updated).
+#
+# Accepting a month's DATA and promoting its MODEL are separate decisions
+# (ADR-0010 amendment 2026-09-23). An open candidate's data is carried into the
+# next month's candidate unless the PR is labelled `data-rejected`; a failed
+# gate or a `model-rejected` label only means "do not promote". Registering and
+# promoting stay human because the registry is local (ADR-0004, ADR-0010).
 
 on:
   schedule:
@@ -17,32 +26,103 @@ on:
   workflow_dispatch:
     inputs:
       month:
-        description: "YYYY-MM to ingest (default: the month after the newest under data/raw/yellow)"
+        description: "YYYY-MM (default: the month after main + open candidates)"
         required: false
       check_only:
-        description: "Only check whether the month is published; never ingest or train"
+        description: "Only plan: report publication and what would happen; never ingest, train or push"
+        type: boolean
+        default: false
+      rebuild:
+        description: "Retrain a month that already has an open candidate PR, replacing its branch"
         type: boolean
         default: false
 
 # One retrain at a time. Two runs would race on the same branch, the same DVC
 # remote and the same dvc.lock. Queued rather than cancelled, so a genuinely
-# new month is never dropped.
+# new month is never dropped - and the queued run plans against the state the
+# first one left (e.g. sees the PR it opened).
 concurrency:
   group: retrain
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  id-token: write
+permissions: {}
 
 jobs:
-  retrain:
+  plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      month: ${{ steps.plan.outputs.month }}
+      published: ${{ steps.plan.outputs.published }}
+      already_ingested: ${{ steps.plan.outputs.already_ingested }}
+      candidate_pr: ${{ steps.plan.outputs.candidate_pr }}
+      carry: ${{ steps.plan.outputs.carry }}
+      carry_prs: ${{ steps.plan.outputs.carry_prs }}
+      lease: ${{ steps.plan.outputs.lease }}
+      should_train: ${{ steps.plan.outputs.should_train }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Read candidate PRs and branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr list --state open --limit 200 \
+            --json number,headRefName,headRefOid,labels > prs.json
+          git ls-remote --heads origin 'refs/heads/retrain/*' > branches.txt
+          echo "open retrain PRs: $(jq -c '[.[] | select(.headRefName | startswith("retrain/")) | {n: .number, b: .headRefName, l: [.labels[].name]}]' prs.json)"
+
+      - name: Plan (HEAD request only)
+        id: plan
+        env:
+          MONTH: ${{ inputs.month }}
+          CHECK_ONLY: ${{ inputs.check_only }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          ARGS=(--prs prs.json --branches branches.txt --month "$MONTH")
+          [ "$CHECK_ONLY" = "true" ] && ARGS+=(--check-only)
+          [ "$REBUILD" = "true" ] && ARGS+=(--rebuild)
+          uv run --frozen --no-dev --no-group train python scripts/retrain_plan.py "${ARGS[@]}" | tee plan.txt
+
+      - name: Report the plan
+        env:
+          CHECK_ONLY: ${{ inputs.check_only }}
+        run: |
+          {
+            echo "### Retrain plan"
+            echo; grep '^reason=' plan.txt | cut -d= -f2-
+            echo; echo '```'; grep -v '^reason=' plan.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A dispatch that would leave a gap is a mistake worth a red run;
+          # a check-only run reports it and stays green.
+          if grep -qx 'gap=true' plan.txt && [ "$CHECK_ONLY" != "true" ]; then
+            echo "::error::$(grep '^reason=' plan.txt | cut -d= -f2-)"
+            exit 1
+          fi
+
+  train:
+    needs: plan
+    if: needs.plan.outputs.should_train == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write   # dispatch ci.yml on the candidate branch
     env:
       MLFLOW_TRACKING_URI: sqlite:///ci-mlflow.db   # throwaway; the real registry is local (ADR-0004)
       MLFLOW_DISABLE_AGENT_HINT: "1"
+      M: ${{ needs.plan.outputs.month }}
+      CARRY: ${{ needs.plan.outputs.carry }}
+      CARRY_PRS: ${{ needs.plan.outputs.carry_prs }}
+      CANDIDATE_PR: ${{ needs.plan.outputs.candidate_pr }}
+      LEASE: ${{ needs.plan.outputs.lease }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -56,113 +136,125 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Decide the month
-        id: month
+      # Only the pointer and the ingest report: the bytes are already in the
+      # DVC remote (that candidate's run pushed them), and nothing else from
+      # an older candidate branch - code, params, outputs - is taken.
+      - name: Carry accepted data from open candidates
+        if: env.CARRY != ''
         run: |
-          if [ -n "${{ inputs.month }}" ]; then M="${{ inputs.month }}"; else
-            LAST=$(ls data/raw/yellow/*.parquet.dvc | sed 's#.*/##; s#.parquet.dvc##' | sort | tail -1)
-            M=$(uv run python -c "from tripduration.prepare import next_month; print(next_month('$LAST'))")
-          fi
-          echo "month=$M" >> "$GITHUB_OUTPUT"; echo "ingesting $M"
+          for c in $CARRY; do
+            git fetch -q origin "retrain/$c"
+            git checkout FETCH_HEAD -- "data/raw/yellow/$c.parquet.dvc" "reports/ingest/yellow-$c.json"
+            echo "carried $c from retrain/$c"
+          done
 
-      # ADR-0003 requires a contiguous month sequence, and `prepare` refuses a
-      # gap. Check before downloading 70 MB: a dispatch that would create one
-      # (e.g. asking for 2025-03 while 2025-02 is still an unmerged candidate)
-      # should fail in two seconds with the reason, not after ingest.
-      - name: Refuse a month that would leave a gap
+      - name: Ingest
         run: |
-          M=${{ steps.month.outputs.month }}
-          LAST=$(ls data/raw/yellow/*.parquet.dvc | sed 's#.*/##; s#.parquet.dvc##' | sort | tail -1)
-          EXPECTED=$(uv run python -c "from tripduration.prepare import next_month; print(next_month('$LAST'))")
-          if [ "${{ inputs.check_only }}" = "true" ]; then
-            echo "check-only dispatch: skipping the contiguity guard"
-            exit 0
-          fi
-          if [ "$M" \> "$EXPECTED" ]; then
-            echo "::error::$M would leave a gap: the newest ingested month is $LAST, so the next is $EXPECTED."
-            echo "Ingest $EXPECTED first, or merge the candidate PR that already contains it."
+          make ingest MONTH="$M"
+          if [ ! -f "data/raw/yellow/$M.parquet" ]; then
+            echo "::error::plan saw $M published, but ingest produced no file"
             exit 1
           fi
-          if [ -f "data/raw/yellow/$M.parquet.dvc" ]; then
-            echo "$M is already ingested on this branch; nothing to do."
-            exit 0
-          fi
-
-      - name: Ingest (404 = not published yet, exits 0)
-        id: ingest
-        run: |
-          make ingest MONTH=${{ steps.month.outputs.month }}
-          if [ -f data/raw/yellow/${{ steps.month.outputs.month }}.parquet ]; then echo "new=true" >> "$GITHUB_OUTPUT"; else echo "new=false" >> "$GITHUB_OUTPUT"; fi
-
-      - name: No new data - skip retraining
-        if: steps.ingest.outputs.new == 'false'
-        run: |
-          M=${{ steps.month.outputs.month }}
-          echo "TLC has not published $M yet; nothing validated, trained or registered."
-          printf '### No new data\n`%s` is not published yet. Next check: Monday 09:00 UTC.\n' "$M" >> "$GITHUB_STEP_SUMMARY"
 
       - name: dvc pull, add, repro, push
-        if: steps.ingest.outputs.new == 'true'
         run: |
           uv run dvc pull -q
-          uv run dvc add data/raw/yellow/${{ steps.month.outputs.month }}.parquet
+          for c in $CARRY $M; do uv run dvc add -q "data/raw/yellow/$c.parquet"; done
           uv run dvc repro
           uv run dvc push -q
 
       - name: Prospective evaluation of the champion
-        if: steps.ingest.outputs.new == 'true'
         id: prospective
         run: |
           uv run python scripts/fetch_champion.py
-          uv run python scripts/prospective_eval.py --month ${{ steps.month.outputs.month }} | tee prospective.txt
-          echo "verdict=$(jq -r .verdict reports/monitoring/${{ steps.month.outputs.month }}.json)" >> "$GITHUB_OUTPUT"
+          uv run python scripts/prospective_eval.py --month "$M" | tee prospective.txt
+          echo "verdict=$(jq -r .verdict "reports/monitoring/$M.json")" >> "$GITHUB_OUTPUT"
 
       - name: Gate the candidate against the champion on the same month
-        if: steps.ingest.outputs.new == 'true'
         id: gate
         run: |
-          uv run python scripts/gate_candidate.py --month ${{ steps.month.outputs.month }} | tee gate.txt
-          V=$(jq -r .verdict reports/monitoring/gate-${{ steps.month.outputs.month }}.json)
-          echo "verdict=$V" >> "$GITHUB_OUTPUT"
+          uv run python scripts/gate_candidate.py --month "$M" | tee gate.txt
+          case "$(jq -r .verdict "reports/monitoring/gate-$M.json")" in
+            pass) echo "label=candidate-passed" >> "$GITHUB_OUTPUT" ;;
+            *)    echo "label=candidate-failed" >> "$GITHUB_OUTPUT" ;;
+          esac
 
-      - name: Open candidate PR
-        if: steps.ingest.outputs.new == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          M: ${{ steps.month.outputs.month }}
+      - name: Push the candidate branch
         run: |
           git config user.name "Niroj33"
           git config user.email "86530493+professor3333@users.noreply.github.com"
-          git switch -c "retrain/$M"
+          git switch -C "retrain/$M"
           git add data/raw/yellow/ dvc.lock metrics/ reports/ models/model_meta.json
           git commit -m "Retrain candidate $M"
-          git push -u origin "retrain/$M"
+          if [ -n "$LEASE" ]; then
+            # Replace the existing branch only if it is still the commit plan
+            # saw; anything pushed since then makes this fail, not vanish.
+            git push --force-with-lease="retrain/$M:$LEASE" origin "retrain/$M"
+          else
+            git push origin "retrain/$M"
+          fi
+
+      - name: Open or update the candidate PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ steps.gate.outputs.label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create retrain --color 0e8a16 --description "Candidate produced by the scheduled retrain" --force
+          gh label create candidate-passed --color 0e8a16 --description "ADR-0007 gate passed on the same month" --force
+          gh label create candidate-failed --color d93f0b --description "ADR-0007 gate failed: do not promote (data may still be accepted)" --force
+          gh label create model-rejected --color d93f0b --description "Owner declined to promote this model; its data is still carried forward" --force
+          gh label create data-rejected --color b60205 --description "This month's data must not be used; later months wait" --force
           {
             echo "## Retrain candidate $M"
             echo; echo "Split: $(jq -c .split reports/prepare.json)"
+            if [ -n "$CARRY" ]; then
+              echo; echo "Carries unmerged accepted data: $CARRY (from open PR(s) $(for n in $CARRY_PRS; do printf '#%s ' "$n"; done))."
+            fi
+            echo; echo "### Two separate decisions"
+            echo "- **Accept the data:** merge this PR. It updates main's data and pipeline outputs; it never changes what is served."
+            echo "- **Promote the model:** \`make register\` then \`make promote VERSION=<n> REASON=...\` (ADR-0010). To decline, label \`model-rejected\` and merge anyway if the data is sound."
+            echo "- Label \`data-rejected\` only if this month's data is wrong: later months then wait for it."
             echo; echo "### Candidate vs fallback"; echo
             echo '```'; jq '{val: {model: .val.model.mae, fallback: .val.fallback.mae}, test: {month: .test.month, model: .test.model.mae, fallback: .test.fallback.mae}}' metrics/eval.json; echo '```'
             echo "### Champion prospective on $M"; echo; echo '```'; cat prospective.txt; echo '```'
             echo "### Gate verdict (ADR-0007)"; echo; echo '```'; cat gate.txt; echo '```'
             echo "### dvc metrics diff main"; echo; echo '```'; uv run dvc metrics diff main --md || true; echo '```'
-            echo; echo "Register and promote are owner actions: \`make register\`, \`make promote VERSION=<n> REASON=...\` (ADR-0010)."
+            echo; echo "Built by $RUN_URL"
           } > body.md
-          LABELS="retrain,candidate-${{ steps.gate.outputs.verdict }}ed"
-          gh pr create --title "Retrain candidate $M (gate: ${{ steps.gate.outputs.verdict }})" \
-            --body-file body.md --label "$LABELS" \
-            || gh pr create --title "Retrain candidate $M" --body-file body.md
-          { echo "### Candidate $M: ${{ steps.gate.outputs.verdict }}"; cat gate.txt; } >> "$GITHUB_STEP_SUMMARY"
+          TITLE="Retrain candidate $M (${LABEL#candidate-})"
+          if [ -n "$CANDIDATE_PR" ]; then
+            gh pr edit "$CANDIDATE_PR" --title "$TITLE" --body-file body.md \
+              --remove-label candidate-passed --remove-label candidate-failed || true
+            gh pr edit "$CANDIDATE_PR" --add-label retrain --add-label "$LABEL"
+            gh pr comment "$CANDIDATE_PR" --body "Rebuilt in place by $RUN_URL (gate: ${LABEL#candidate-})."
+            PR="$CANDIDATE_PR"
+          else
+            gh pr create --head "retrain/$M" --title "$TITLE" --body-file body.md \
+              --label retrain --label "$LABEL"
+            PR=$(gh pr view "retrain/$M" --json number -q .number)
+          fi
+          # The required `ci` check, which a GITHUB_TOKEN-opened PR never gets
+          # on its own. It runs on the branch head, so it reports on the PR.
+          gh workflow run ci.yml --ref "retrain/$M"
+          for n in $CARRY_PRS; do
+            gh pr comment "$n" --body "This PR's data is carried into #$PR ($M). Merging #$PR accepts it too; this PR's model decision is unaffected. Close this PR once #$PR is merged."
+          done
+          { echo "### Candidate $M: #$PR ${LABEL#candidate-}"; cat gate.txt; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open model-drift issue
-        if: steps.ingest.outputs.new == 'true' && steps.prospective.outputs.verdict == 'degraded'
+      - name: Open or update the model-drift issue
+        if: steps.prospective.outputs.verdict == 'degraded'
         env:
           GH_TOKEN: ${{ github.token }}
-          M: ${{ steps.month.outputs.month }}
         run: |
           {
             cat prospective.txt
             echo
             echo "See reports/monitoring/$M.json on branch retrain/$M. Threshold: ADR-0011."
           } > drift.md
-          gh issue create --title "Model drift on $M" --body-file drift.md --label model-drift \
-            || gh issue create --title "Model drift on $M" --body-file drift.md
+          N=$(gh issue list --state open --label model-drift --search "\"Model drift on $M\" in:title" --json number -q '.[0].number')
+          if [ -n "$N" ]; then
+            gh issue comment "$N" --body-file drift.md
+          else
+            gh issue create --title "Model drift on $M" --body-file drift.md --label model-drift
+          fi
