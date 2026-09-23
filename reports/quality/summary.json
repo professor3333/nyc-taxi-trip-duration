@@ -6,7 +6,8 @@
     "2024-12",
     "2025-01",
     "2025-02",
-    "2025-03"
+    "2025-03",
+    "2025-04"
   ],
   "passed": true,
   "per_month": {
@@ -63,8 +64,17 @@
       "removed_over_180_min": 1574,
       "rows_raw": 4145257,
       "rows_valid": 3978874
+    },
+    "2025-04": {
+      "p50_min": 13.017,
+      "p99_min": 67.6,
+      "reject_rate": 0.041454,
+      "removed_at_or_below_0_min": 34769,
+      "removed_over_180_min": 1593,
+      "rows_raw": 3970553,
+      "rows_valid": 3805957
     }
   },
-  "rows_raw_total": 22346537,
-  "rows_valid_total": 21538114
+  "rows_raw_total": 26317090,
+  "rows_valid_total": 25344071
 }
