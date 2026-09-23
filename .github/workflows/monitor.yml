@@ -36,8 +36,22 @@ jobs:
             --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt \
             || echo "failed=true" >> "$GITHUB_OUTPUT"
 
+      # The endpoint callers actually use: an HTTP request to the Function URL,
+      # SigV4-signed as this (non-root) role. The Lambda-API check above
+      # proves the service; this one proves the URL edge and its auth.
+      - name: Check the Function URL over HTTP
+        id: url
+        continue-on-error: true
+        run: |
+          URL=$(aws lambda get-function-url-config --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            --query FunctionUrl --output text)
+          uv run python scripts/deploy_check.py --url "$URL" --sigv4 \
+            --expect-version "v$(jq -r .version models/champion.json)" \
+            --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee -a check.txt \
+            || echo "failed=true" >> "$GITHUB_OUTPUT"
+
       - name: Open or update issue
-        if: steps.check.outputs.failed == 'true'
+        if: steps.check.outputs.failed == 'true' || steps.url.outputs.failed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -53,7 +67,7 @@ jobs:
           exit 1
 
       - name: Close issue when healthy
-        if: steps.check.outputs.failed != 'true'
+        if: steps.check.outputs.failed != 'true' && steps.url.outputs.failed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

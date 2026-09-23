@@ -156,3 +156,10 @@ Tick a line only when its proof command passes, not when the code is written.
 - `teardown.sh` deletes all 5 alarms (it deleted 2).
 - Proof (offline): `uv run pytest tests/test_lambda_sh.py` — 7 tests against a stateful fake `aws`; all 7 fail on the previous script.
 - **Not yet run live:** `make lambda-drill IMAGE=…` (scratch function, deleted afterwards) and the reconcile run on the serving function — both add a resource-policy grant and need the owner's go-ahead.
+
+## Function URL checked over HTTP as a non-root identity — 2026-09-23
+
+- **Diagnosis:** the 2026-09-22 403 for the Actions role (run 35732868805) happened while its identity policy lacked `lambda:InvokeFunction`, which Function URLs have required since Oct 2025; it was added 10 min later for `--invoke` and the URL was never retried. There was no account restriction. ADR-0008 sections 2/2b are marked superseded, with the correction.
+- **Proof:** monitor run 35824718485 — HTTP to the Function URL, SigV4 as `assumed-role/…-github-actions`: every route 200, 80/80 fixture rows match, 9/9 malformed → 422.
+- `monitor.yml` and `deploy.yml` now run both checks: `--invoke` (service) and `--url … --sigv4` (the real endpoint). The URL is read from Lambda at run time, not from the `FUNCTION_URL` secret.
+- **Not verified:** auth `NONE` with both public grants (`make lambda-drill`, needs owner go-ahead). The `deploy.yml` URL step runs on the next deploy; the command is the one proven above.

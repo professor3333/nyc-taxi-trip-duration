@@ -46,7 +46,8 @@ trip, join the result) would be a separate feature.
 ## Service health
 
 - **`monitor.yml`** daily: `deploy_check.py --expect-version v<champion.json>`
-  against the Function URL; failure opens/updates one `service-health` issue,
+  through the Lambda API and over HTTP against the Function URL (SigV4 as
+  the Actions role); failure opens/updates one `service-health` issue,
   recovery closes it.
 - **CloudWatch** (created by `deploy/aws/lambda.sh`), namespace
   `nyc-taxi-trip-duration`, log retention 14 days:
