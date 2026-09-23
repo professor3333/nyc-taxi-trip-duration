@@ -163,14 +163,16 @@ jobs:
         run: |
           uv run dvc pull -q
           for c in $CARRY $M; do uv run dvc add -q "data/raw/yellow/$c.parquet"; done
-          uv run dvc repro
+          # Train and evaluate where the model will serve: the Dockerfile's
+          # `train` target (serving image's pinned base, linux/amd64).
+          scripts/train_env.sh uv run --locked dvc repro
           uv run dvc push -q
 
       - name: Prospective evaluation of the champion
         id: prospective
         run: |
           uv run python scripts/fetch_champion.py
-          uv run python scripts/prospective_eval.py --month "$M" | tee prospective.txt
+          scripts/train_env.sh uv run --locked python scripts/prospective_eval.py --month "$M" | tee prospective.txt
           echo "verdict=$(jq -r .verdict "reports/monitoring/$M.json")" >> "$GITHUB_OUTPUT"
 
       - name: Gate the candidate against the champion on the same month

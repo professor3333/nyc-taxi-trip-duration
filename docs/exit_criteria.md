@@ -8,10 +8,14 @@ Each criterion is met only when its proof is linked here.
 dvc repro` reproduces `metrics/eval.json` within tolerance, and the
 reproducibility test passes.
 
-**Tolerance.** Absolute **1e-9 minutes on predictions** and 1e-9 on every
-metric (`PRED_TOLERANCE`, `TOLERANCE`). Predictions are the primary check —
-equal metrics can hide compensating differences. `git_sha` is excluded: it
-records the commit at training time. See `docs/reproducibility.md`.
+**Tolerance.** **0: bit-identical predictions** (stored unrounded) and 0 on
+every metric (`PRED_TOLERANCE`, `TOLERANCE`). NaN, inf and missing values
+fail. Expected results are read from the audited commit's git objects.
+Stages run in the canonical training environment (`scripts/train_env.sh`,
+the serving image's pinned base, linux/amd64). Predictions are the primary
+check, because equal metrics can hide compensating differences. `git_sha`
+is excluded: it records the commit at training time. See
+`docs/reproducibility.md`.
 
 **Every stage is re-executed** (`dvc repro --force --no-run-cache`). Without
 those flags DVC restored cached outputs in 1.1 s and reported everything

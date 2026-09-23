@@ -1,62 +1,57 @@
 #!/usr/bin/env bash
-# Exit criterion 1: from a fresh clone of the current commit, `dvc pull` +
-# `dvc repro` must reproduce **the predictions**, not merely the metrics.
-# Equal metrics can hide compensating differences; equal predictions on the
-# same fixed request grid cannot.
+# Exit criterion 1: from a fresh clone of a commit, `dvc pull` + `dvc repro`
+# must reproduce **the predictions**, not merely the metrics, bit for bit.
 #
-# Every stage is re-executed (`--force --no-run-cache`): restoring outputs
-# from DVC's run cache would prove only that the cache works.
+#   make reproduce                 # HEAD
+#   make reproduce REV=<sha>       # any commit
 #
-# Compares, against the committed copies:
-#   reports/eval/fixture_predictions.csv   80 rows, PRED_TOLERANCE minutes
-#   metrics/eval.json                      every number, TOLERANCE
+# What makes the assurance real (docs/reproducibility.md):
+# - Expected results are read from the git objects of the audited commit
+#   (`git show <sha>:<path>`), never from a working tree.
+# - The stages run in the canonical training environment
+#   (scripts/train_env.sh: Dockerfile `train` target, linux/amd64, the
+#   serving image's pinned base), with no network, every stage re-executed
+#   (`--force --no-run-cache` - restoring from DVC's run cache would prove
+#   only that the cache works).
+# - Predictions are stored unrounded and compared at tolerance 0; any NaN,
+#   inf or unparsable value fails.
 #
-#   make reproduce
-#   TOLERANCE=1e-6 PRED_TOLERANCE=1e-6 make reproduce
-#
-# Prerequisites: uv, git, and read access to the DVC remote named in
+# Prerequisites: git, uv, docker, and read access to the DVC remote named in
 # .dvc/config (or a .dvc/config.local pointing somewhere you can read).
-# Without the remote, re-ingest from TLC first — see README.
 set -euo pipefail
 
 REPO_DIR=$(git rev-parse --show-toplevel)
-SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
-TOLERANCE=${TOLERANCE:-1e-9}
-PRED_TOLERANCE=${PRED_TOLERANCE:-1e-9}
+SHA=$(git -C "$REPO_DIR" rev-parse "${REV:-HEAD}^{commit}")
+TOLERANCE=${TOLERANCE:-0}
+PRED_TOLERANCE=${PRED_TOLERANCE:-0}
 WORK=$(mktemp -d -t reproduce.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 echo "== clone $SHA into $WORK"
 git clone -q "$REPO_DIR" "$WORK/clone"
 cd "$WORK/clone"
-git checkout -q "$SHA"
+git checkout -q --detach "$SHA"
 
 echo "== remote: reuse this machine's .dvc/config.local if it has one"
 if [ -f "$REPO_DIR/.dvc/config.local" ]; then
   cp "$REPO_DIR/.dvc/config.local" .dvc/config.local
 fi
 
-echo "== uv sync --frozen --group train"
+echo "== dvc pull (host: needs the remote's credentials)"
 uv sync --frozen --group train -q
-
-echo "== dvc pull"
 uv run dvc pull -q
 
-echo "== dvc repro (MLflow -> sqlite in the temp dir)"
-export MLFLOW_TRACKING_URI="sqlite:///$WORK/mlflow.db"
-export MLFLOW_DISABLE_AGENT_HINT=1
-# --force --no-run-cache: every stage must actually execute. Without these,
-# DVC restores identical outputs from its run cache in about a second, which
-# proves only that the cache works — not that training reproduces.
-time uv run dvc repro --force --no-run-cache
+echo "== dvc repro in the canonical training environment, no network"
+# MLflow logs to a throwaway sqlite file inside the clone (mounted at /work).
+START=$SECONDS
+MLFLOW_TRACKING_URI="sqlite:////work/.reproduce-mlflow.db" TRAIN_ENV_NETWORK=none \
+  scripts/train_env.sh uv run --locked dvc repro --force --no-run-cache
+echo "   repro took $(( (SECONDS - START) / 60 )) min"
 
 echo
-echo "== dvc metrics diff (committed vs reproduced)"
-uv run dvc metrics diff --md HEAD || true
-
-echo
+echo "== compare with the committed results of $SHA"
 uv run python scripts/compare_run.py \
-  --repo "$REPO_DIR" \
+  --expected-rev "$SHA" \
   --pred-tolerance "$PRED_TOLERANCE" \
   --metric-tolerance "$TOLERANCE"
 

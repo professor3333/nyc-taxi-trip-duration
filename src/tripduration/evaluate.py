@@ -116,8 +116,10 @@ def fixture_predictions(
             PU: frame[PU],
             DO: frame[DO],
             DEPARTURE: frame[DEPARTURE].astype(str),
-            "model_min": np.round(pred_model, 6),
-            "fallback_min": np.round(pred_fb, 6),
+            # Unrounded: pandas writes floats as repr, which round-trips
+            # exactly, so `make reproduce` can compare bit for bit.
+            "model_min": pred_model,
+            "fallback_min": pred_fb,
             "fallback_level": level,
         }
     )
@@ -196,7 +198,7 @@ def run(
     result["fixture_predictions"] = {
         "rows": len(fixture),
         "file": str(reports_dir / "fixture_predictions.csv"),
-        "model_min_sum": round(float(fixture["model_min"].sum()), 6),
+        "model_min_sum": float(fixture["model_min"].sum()),
     }
     result["model_beats_fallback_on_test"] = bool(
         result["test"]["model"]["mae"] < result["test"]["fallback"]["mae"]

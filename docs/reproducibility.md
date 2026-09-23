@@ -1,21 +1,24 @@
 # Reproducible training
 
-`make reproduce` clones the current commit into a temporary directory, pulls
-the data, **re-executes every pipeline stage**, and compares the result with
-what is committed. It passes only if the predictions match.
+`make reproduce` (or `make reproduce REV=<sha>`) clones a commit into a
+temporary directory, pulls the data, **re-executes every pipeline stage in
+the canonical training environment** with no network, and compares the
+result with the results **stored in that commit's git objects**. It passes
+only if every prediction is bit-identical and every metric is equal.
 
 ## What is recorded, and where
 
 | Recorded | Where |
 |---|---|
 | Git commit that trained the model | `models/model_meta.json › git_sha`, MLflow tag `git_sha`, `metrics/eval.json › git_sha` |
-| Data version — md5 of every pipeline input and output | `models/model_meta.json › data_versions` (from `dvc.lock`), plus `dvc_lock_md5` |
+| Input provenance — what this fit read | `models/model_meta.json › inputs_md5`: md5 of each file `train` opened (processed train/val, `prepare.json`, centroids, holidays), hashed by the stage itself; MLflow tag `train_parquet_md5` |
+| Completed-run provenance — every stage's inputs and outputs | `dvc.lock` at the commit. `register.py` records its md5 as the registry tag `dvc_lock_md5` and refuses while `dvc status` is not clean. `train` no longer reads `dvc.lock`: while it runs, its own and `evaluate`'s entries are still the previous run's |
 | Raw data provenance — what TLC served and when | `reports/ingest/yellow-YYYY-MM.json` (`source_md5`, `etag`, `bytes`, source schema) |
 | Parameters and random seed | `params.yaml` (DVC-tracked), `model_meta.json › model_params`, `seed`, `params_hash`, MLflow params |
 | Split boundaries | `model_meta.json › split_boundaries` and `train_months` / `val_month` / `test_month`; derived by ADR-0003's rule, never hand-listed |
 | Locked dependencies | `uv.lock` in git; `model_meta.json › environment.uv_lock_md5` pins the exact set `uv sync --frozen` installs; key package versions recorded alongside |
 | Training environment | `environment.platform`, `machine`, `python_version`, `packages`, `thread_env` (OMP/OPENBLAS/MKL) |
-| Training container | `environment.container` — the image id when `TRAINING_IMAGE` is set. Empty means training ran on the host, which is the honest answer for local runs; the retrain workflow runs on `ubuntu-latest` with the same locked environment |
+| Training container | `environment.container`: `tripduration-train:<hash of Dockerfile + uv.lock>@<image id>`, set by `scripts/train_env.sh`. Empty means the run was **not** in the canonical environment and its outputs should not be committed |
 | Metrics | `metrics/eval.json`: MAE, MAPE, RMSE, P90 absolute error, bias, n — for the model **and** the fallback, on validation and test |
 | Tail errors | P90 absolute error per split; `quality` reports the duration bands and p99/p99.9 of the input distribution |
 | Results by hour | `reports/eval/{val,test}_mae_by_hour.csv` |
@@ -24,15 +27,24 @@ what is committed. It passes only if the predictions match.
 
 ## The declared tolerance
 
-**Predictions: 1e-9 minutes. Metrics: 1e-9.** Both are absolute.
+**Predictions: 0, i.e. bit-identical. Metrics: 0.** Both are absolute and can
+be relaxed with `PRED_TOLERANCE` / `TOLERANCE`. A relaxation belongs in this
+document, with the reason and the environments compared.
 
-These are deliberately tighter than "close enough". On one machine with the
-same `uv.lock`, the same seed and the same thread count, this pipeline is
-**bit-identical** — the measured difference is `0.000e+00`. A tolerance is
-declared anyway because a different CPU or BLAS build can reorder
-floating-point sums; if that ever happens the number to relax is
-`PRED_TOLERANCE`, and the relaxation belongs in this document with the reason
-and the machines compared.
+Three rules keep the comparison honest (`tests/test_compare_run.py`):
+
+- **Full precision.** `reports/eval/fixture_predictions.csv` stores
+  unrounded floats. pandas writes `repr`, which round-trips exactly. The
+  file used to be rounded to 6 decimals, so comparing it at 1e-9 said
+  nothing below 5e-7.
+- **Non-finite values fail.** `NaN > tol` is false, so the old comparator
+  passed a NaN prediction as "no difference". NaN, ±inf and unparsable
+  values now fail on either side, whatever the tolerance. Metric keys
+  missing from either side fail too.
+- **Immutable expected results.** Expected values come from
+  `git show <sha>:<path>` in the reproduced clone. Before, they came from
+  the working tree of the repository `make reproduce` was started from,
+  which could be dirty or regenerated.
 
 `git_sha` inside `metrics/eval.json` is excluded from the comparison: it
 records the commit at training time, which is by construction the parent of
@@ -92,38 +104,52 @@ real	4m46.001s
 == reproduce OK for ab70bd93799066e91b2cac0a6d106aecd5a6781c
 ```
 
-## Predictions are architecture-sensitive — measured
+## Architecture sensitivity — cause identified
 
-Same model bytes, same features, different CPU architecture, different answer:
+**What was claimed before (2026-09-22):** on v3, arm64 and amd64 gave
+different predictions "with features identical to the last digit printed",
+explained as a last-bit feature difference falling on the other side of a
+tree split. Matching printed digits proves neither that the features were
+bit-identical nor where the difference came from, and "every row differs"
+included the API's 2-decimal rounding.
 
-| | arm64 (this laptop) | linux/amd64 (the Lambda image) |
-|---|---|---|
-| zone 138 → 230, 2025-01-11 00:30 | 24.9627 min | 25.3806 min |
+**Measured (2026-09-23, `build/archprobe`, champion v3 `f575719b…`, numpy
+2.5.3 / scikit-learn 1.9.1 on both sides).** The 80-row fixture grid ran
+natively on macOS arm64 and in the serving image's builder stage on
+linux/amd64. Both sides wrote their features to parquet and compared hex
+floats, and each side's features were then fed to the *other* architecture's
+`predict`:
 
-The features are identical to the last digit printed (`centroid_dist_km`
-9.474219, `weekday` 5, `is_holiday` 0) and `model.pkl` is byte-identical
-(md5 `f575719b…`). A feature value that differs in its final bits falls the
-other side of a tree split, and the sample lands in a different leaf.
+| comparison | result |
+|---|---|
+| feature bits, arm64 vs amd64 | 9 of 10 features bit-identical; **`centroid_dist_km` differs on 20/80 rows** (1 ulp) |
+| `predict` on identical feature bits, arm64 vs amd64 (both directions) | **0/80 differ**: the model evaluates identically |
+| end to end, arm64 vs amd64 | 10/80 predictions differ, max 0.597 min |
+| live Lambda vs amd64 probe | all within the API's 2-decimal rounding (max 4.98e-3) |
 
-Across the 80-row grid for champion v3: **every row differs, mean 0.043 min
-(2.6 s), max 0.597 min, at most 1.98% of the prediction.** For champion v1
-the same comparison gives 0.000 — fewer trees, fewer thresholds to straddle,
-so it is luck rather than a property to rely on.
+**Cause:** `centroid_dist_km = np.hypot(dx, dy)`. macOS libm and glibc
+round `hypot` differently in the last bit. Where a tree threshold falls
+between the two values, the row lands in another leaf. The model itself is
+not architecture-sensitive. The full-data lock regeneration saw the same
+thing: `hypot` differed on 14% of 17.5M training rows, every other feature
+matched.
 
-Consequences, all of them recorded rather than assumed:
+**Fix:** train and evaluate where the model serves. The Dockerfile's `train`
+target shares the serving image's **digest-pinned** base (Python 3.12.14,
+Debian 13, glibc 2.41) and `uv.lock`, on linux/amd64. `make pipeline`,
+`make reproduce` and `retrain.yml` all run stages through
+`scripts/train_env.sh`. Pinning the digest matters as much as the
+container: a moved `python:3.12-slim` tag could change glibc under either
+image. Computing the distance from a shipped zone-pair table would remove
+this dependency entirely; that is a feature change (ADR-0005) and is not
+done here.
 
-- `models/champion.json › fixture_platform` says where the expected
-  predictions were computed (`Darwin-arm64` today).
-- `deploy_check.py --expect-fixture` defaults to `--fixture-tolerance 1.0`
-  minute, justified by the measurement above. Pass `1e-9` when both sides
-  share an architecture — that is the stricter check and the one
-  `make reproduce` uses.
-- The MAE in `metrics/eval.json` was computed on the training machine. The
-  deployed model's predictions differ by ≲2%, so the served accuracy is not
-  exactly the reported number. The honest way to close that gap is to train
-  and evaluate on the serving architecture; the retrain workflow already runs
-  on `ubuntu-latest` (x86_64), so a model promoted from a retrain PR is
-  measured where it serves.
+**Still true for v3:** it was trained on arm64 and serves on amd64, so its
+recorded fixture (`models/champion_fixture.csv`, `fixture_platform:
+Darwin-arm64`) differs from what it serves on 10/80 rows.
+`deploy_check.py --fixture-tolerance 1.0` stays justified for v3. A model
+trained in the canonical environment can be checked at the API's rounding
+(0.005).
 
 ## The other two reproducibility checks
 
