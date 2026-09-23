@@ -38,9 +38,12 @@ on:
         default: false
 
 # One retrain at a time. Two runs would race on the same branch, the same DVC
-# remote and the same dvc.lock. Queued rather than cancelled, so a genuinely
-# new month is never dropped - and the queued run plans against the state the
-# first one left (e.g. sees the PR it opened).
+# remote and the same dvc.lock. cancel-in-progress: false keeps the running
+# one alive, but GitHub holds only ONE pending run per group: a third run
+# cancels the pending second (observed: run 35813964651). That is safe here
+# because plan derives everything from current state - the surviving run
+# picks up the next month itself - but a dispatched *specific* month can be
+# dropped and must be re-dispatched.
 concurrency:
   group: retrain
   cancel-in-progress: false
@@ -114,7 +117,6 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: write   # dispatch ci.yml on the candidate branch
     env:
       MLFLOW_TRACKING_URI: sqlite:///ci-mlflow.db   # throwaway; the real registry is local (ADR-0004)
       MLFLOW_DISABLE_AGENT_HINT: "1"
@@ -212,7 +214,7 @@ jobs:
               echo; echo "Carries unmerged accepted data: $CARRY (from open PR(s) $(for n in $CARRY_PRS; do printf '#%s ' "$n"; done))."
             fi
             echo; echo "### Two separate decisions"
-            echo "- **Accept the data:** merge this PR. It updates main's data and pipeline outputs; it never changes what is served."
+            echo "- **Accept the data:** approve the held \`ci\` run (\`make approve-ci BRANCH=retrain/$M\`), then merge this PR. It updates main's data and pipeline outputs; it never changes what is served."
             echo "- **Promote the model:** \`make register\` then \`make promote VERSION=<n> REASON=...\` (ADR-0010). To decline, label \`model-rejected\` and merge anyway if the data is sound."
             echo "- Label \`data-rejected\` only if this month's data is wrong: later months then wait for it."
             echo; echo "### Candidate vs fallback"; echo
@@ -240,9 +242,10 @@ jobs:
               --label retrain --label "$LABEL"
             PR=$(gh pr view "retrain/$M" --json number -q .number)
           fi
-          # The required `ci` check, which a GITHUB_TOKEN-opened PR never gets
-          # on its own. It runs on the branch head, so it reports on the PR.
-          gh workflow run ci.yml --ref "retrain/$M"
+          # GitHub holds this PR's `ci` run at action_required because a bot
+          # opened it; a human approves it as part of accepting the data
+          # (docs/runbook.md). A dispatched ci run does NOT count: its check
+          # suite is not linked to the PR, so branch protection ignores it.
           for n in $CARRY_PRS; do
             gh pr comment "$n" --body "This PR's data is carried into #$PR ($M). Merging #$PR accepts it too; this PR's model decision is unaffected. Close this PR once #$PR is merged."
           done

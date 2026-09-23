@@ -132,3 +132,12 @@ Tick a line only when its proof command passes, not when the code is written.
 - **Overlap prevented:** runs 35763985452 / 35763998622 fired 7 s apart; the second sat `pending` until the first finished. `cancel-in-progress: false`, so a queued week is delayed, never dropped.
 - **Gap refused fast:** dispatching 2025-03 with 2025-02 unmerged now fails in 22 s at the contiguity guard with the reason and the fix, instead of after a 70 MB ingest.
 - **Bug found by the weekly schedule:** TLC returns **403**, not 404, for an unpublished month (CloudFront over S3 without ListBucket). Verified live: 2025-03 -> 200; 2026-08, 2099-01 and a nonsense path -> 403. The weekly check would have failed every Monday; both codes are now 'not published' and neither is retried.
+
+## Repeatable retraining — 2026-09-23 (observed on Actions)
+
+- `retrain.yml` is now `plan` (read-only token, no AWS role; `scripts/retrain_plan.py`, 14 unit tests) → `train` (only on `should_train=true`). `check_only` makes one HEAD request and never trains.
+- **Same month twice:** `month=2025-02` dispatched twice (runs 35813958744, 35814056521) with PR #24 open — both green, `train` skipped, reason "already a candidate in PR #24". `rebuild=true` replaces a candidate via `--force-with-lease` and edits the same PR.
+- **Rejected model does not block data:** #24 labelled `candidate-failed` + `model-rejected` and left open; the default dispatch (35813971036) planned 2025-03 **carrying 2025-02's pointer**, trained on 2024-10..2025-01 / val 2025-02 / test 2025-03 and opened PR #43 (gate PASS 3.5186 vs 3.6454), commenting on #24.
+- **Found:** bot-opened candidate PRs get `ci` held at `action_required`, so they could never be merged under branch protection. A dispatched `ci` run does not count (suite not linked to the PR). `make approve-ci BRANCH=retrain/<M>` is the human data-acceptance step; #43 went BLOCKED → CLEAN after it.
+- **Corrected:** concurrency does drop runs — GitHub keeps one pending run per group; a third dispatch cancelled the pending second (35813964651). Safe for the schedule because `plan` works from current state; a specific dispatched month must be re-dispatched.
+- `gh pr edit` fails on this repo (GraphQL Projects-classic deprecation); the workflow edits PRs via REST.
