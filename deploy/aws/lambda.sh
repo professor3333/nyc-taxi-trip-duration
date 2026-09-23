@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# Lambda (container image) + Function URL + log group + alarms. Needs an image
-# already in ECR: pass its URI as $1 (deploy.yml pushes it). Idempotent.
-#   deploy/aws/lambda.sh 123456789012.dkr.ecr.us-east-1.amazonaws.com/nyc-taxi-trip-duration:<sha>
+# Lambda (container image) + `live` alias + Function URL + log group + alarms.
+# Needs an image already in ECR: pass its URI as $1. Idempotent.
+#
+# Traffic is served ONLY through the alias `live`, which points at an
+# immutable published version. $LATEST is a staging slot: deploy.yml puts a
+# candidate there, publishes it as a version, tests that version with no
+# traffic on it, then moves `live` - and moves it back if verification fails.
+# This script creates the alias once; it never moves an existing one.
+#   deploy/aws/lambda.sh <account>.dkr.ecr.us-east-1.amazonaws.com/nyc-taxi-trip-duration@sha256:<d> v3
+# The second argument is the model version that image serves; it is written
+# into the first published version's description (model=vN), which is how
+# deploy.yml knows what a restore must report.
 source "$(dirname "$0")/env.sh"
 IMAGE_URI="${1:?image uri required}"
+MODEL_VERSION="${2:?model version the image serves, e.g. v3}"
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
 LOG_GROUP="/aws/lambda/${LAMBDA_FUNCTION_NAME}"
 
@@ -26,27 +36,43 @@ if ! aws lambda put-function-concurrency --function-name "$LAMBDA_FUNCTION_NAME"
   log "could not reserve $LAMBDA_RESERVED_CONCURRENCY; account concurrency limit is $LIMIT and already caps spend"
 fi
 
-if ! aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
-  aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" \
+ALIAS=live
+if ! aws lambda get-alias --function-name "$LAMBDA_FUNCTION_NAME" --name "$ALIAS" >/dev/null 2>&1; then
+  V=$(aws lambda publish-version --function-name "$LAMBDA_FUNCTION_NAME" \
+        --description "model=$MODEL_VERSION initial image=${IMAGE_URI##*@}" --query Version --output text)
+  aws lambda create-alias --function-name "$LAMBDA_FUNCTION_NAME" --name "$ALIAS" \
+    --function-version "$V" --description "serving traffic" >/dev/null
+  log "created alias $ALIAS -> version $V"
+fi
+
+# The URL belongs to the alias. An unqualified URL would serve $LATEST, i.e.
+# an untested candidate during every deploy, so it is removed.
+if aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
+  aws lambda delete-function-url-config --function-name "$LAMBDA_FUNCTION_NAME"
+  aws lambda remove-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url >/dev/null 2>&1 || true
+  aws lambda remove-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id github-actions-url >/dev/null 2>&1 || true
+  log "removed the unqualified Function URL (it served \$LATEST)"
+fi
+if ! aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --qualifier "$ALIAS" >/dev/null 2>&1; then
+  aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --qualifier "$ALIAS" \
     --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
-  log "created Function URL (auth $LAMBDA_URL_AUTH_TYPE)"
+  log "created Function URL on alias $ALIAS (auth $LAMBDA_URL_AUTH_TYPE)"
 fi
 
 # Who may invoke the URL. With AWS_IAM, a same-account *role* still needs a
 # resource-policy statement (only the account root bypasses it), so the
-# GitHub Actions role is granted here; deploy.yml and monitor.yml sign with
-# SigV4 as that role.
+# GitHub Actions role is granted here.
 if [ "$LAMBDA_URL_AUTH_TYPE" = "NONE" ]; then
-  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --statement-id public-url \
+  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --qualifier "$ALIAS" --statement-id public-url \
     --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE \
     >/dev/null 2>&1 || true
 else
-  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" \
+  aws lambda add-permission --function-name "$LAMBDA_FUNCTION_NAME" --qualifier "$ALIAS" \
     --statement-id github-actions-url --action lambda:InvokeFunctionUrl \
     --principal "arn:aws:iam::${ACCOUNT_ID}:role/${GH_OIDC_ROLE_NAME}" \
     --function-url-auth-type AWS_IAM >/dev/null 2>&1 || true
 fi
-FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --query FunctionUrl --output text)
+FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --qualifier "$ALIAS" --query FunctionUrl --output text)
 
 aws logs create-log-group --log-group-name "$LOG_GROUP" --tags "$TAG_JSON" 2>/dev/null || true
 aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days "$LOG_RETENTION_DAYS"

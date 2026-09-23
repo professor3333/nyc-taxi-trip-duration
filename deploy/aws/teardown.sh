@@ -6,6 +6,7 @@ source "$(dirname "$0")/env.sh"
 read -r -p "Tear down ALL ${PROJECT} resources in ${ACCOUNT_ID}/${AWS_REGION}, including s3://${S3_BUCKET}? [yes/NO] " ans
 [ "$ans" = "yes" ] || { echo "aborted"; exit 1; }
 
+aws lambda delete-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" --qualifier live 2>/dev/null || true
 aws lambda delete-function-url-config --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || true
 aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null && log "deleted lambda" || true
 for NAME in ErrorCount FallbackCount; do

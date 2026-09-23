@@ -20,10 +20,26 @@ uv run python scripts/deploy_check.py --url http://localhost:8082 --expect-versi
 1. `deploy/aws/budget.sh` first, then `s3.sh`, `ecr.sh`, `iam.sh` (see `deploy/README.md`).
 2. Switch DVC to S3: `uv run dvc remote add -d s3 s3://<bucket>/dvc`, commit `.dvc/config`, `uv run dvc push`.
 3. Set repo secrets `AWS_ROLE_ARN AWS_REGION S3_BUCKET ECR_REPOSITORY LAMBDA_FUNCTION_NAME FUNCTION_URL`.
-4. First image + function: run `deploy.yml` by `workflow_dispatch` up to the push step, then `deploy/aws/lambda.sh <image uri>`; set `FUNCTION_URL`; re-run `deploy.yml`.
+4. First image + function: run `deploy.yml` by `workflow_dispatch` up to the push step, then `deploy/aws/lambda.sh <image uri@digest> v<n>` (creates version 1 and alias `live`, and puts the Function URL on the alias); set `FUNCTION_URL`; re-run `deploy.yml`.
 5. Verify: `uv run python scripts/deploy_check.py --url $FUNCTION_URL --expect-version v<n> --malformed --cold`.
 
 ## Rollback
+
+**Automatic.** If `deploy.yml` moved alias `live` and live verification then
+failed (or the run died in between), it has already moved `live` back to the
+recorded previous version and checked it. The run is red, and its summary says
+`RESTORED` and has the release record (`release-record` artifact).
+
+**Instant, by hand** (a bad release got past verification), with no rebuild:
+```
+aws lambda list-versions-by-function --function-name nyc-taxi-trip-duration \
+  --query 'Versions[].[Version,Description]' --output text   # model=vN in each description
+aws lambda update-alias --function-name nyc-taxi-trip-duration --name live --function-version <previous>
+uv run python scripts/deploy_check.py --invoke nyc-taxi-trip-duration:live --expect-version v<n-1> --malformed
+```
+Then make git agree (below), or the next deploy re-ships the bad champion.
+
+**Of the champion pointer** (the durable one):
 
 ```
 make rollback REASON="deploy_check failed on v<n>: <what>"

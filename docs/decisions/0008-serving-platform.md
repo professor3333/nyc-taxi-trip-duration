@@ -80,6 +80,49 @@ interactive use by the account owner. If the account restriction lifts,
 unreserved. The account limit is itself the cap, which is what the
 reservation was for; `deploy/aws/lambda.sh` now logs this and continues.
 
+## Amendment, 2026-09-23: a failing deployment must not stay live
+
+**Context.** `deploy.yml` ran `update-function-code` on the only thing
+serving traffic and ran `deploy_check` afterwards. A red check left the bad
+image live, with nothing recorded to restore to. And CI smoke-tested an image
+built with a *fixture* model: the real champion image first ran in production.
+
+**Decision.**
+
+- **Traffic goes through alias `live` only.** It points at an immutable
+  published version; the Function URL is on the alias (the unqualified URL,
+  which served `$LATEST`, is removed). `$LATEST` is a staging slot.
+- **Gates before traffic.** (1) The exact release image is built and
+  smoke-tested on the runner: version, `/health/ready`, the 80-row fixture,
+  malformed input. (2) Those bytes are pushed; the pushed digest is checked
+  against the local image and its manifest against Docker v2. (3) It is
+  published as a new version and verified by invoking **that version** with no
+  traffic on it.
+- **Record, activate, verify, restore.** Before staging, the workflow records
+  the version `live` points at (its model from the `model=vN` description,
+  its image digest) and refuses to deploy if that image is gone from ECR. After
+  moving `live`, it verifies again. On failure or cancellation it moves `live`
+  back, verifies the restore, and fails the run. The release record is a run
+  artifact.
+- **Rollback targets are kept.** ECR lifecycle rule 1 keeps the last 5
+  release images (`v*` tags). A higher-priority rule's images cannot be
+  expired by a lower one, so rule 2 (3 of anything else: drills, untagged)
+  never pushes a rollback target out.
+- **CI's permissions** gain `PublishVersion`, `GetAlias`, `UpdateAlias` and
+  `ListVersionsByFunction`, and cover qualified ARNs (`function:NAME:*`). CI
+  cannot create or delete aliases, or delete versions.
+- **Drills.** `workflow_dispatch` `drill=incompatible|incompatible-past-smoke|incompatible-to-live`
+  deploys a `model_meta.json` whose feature list does not match the code,
+  with 0, 1 or 2 gates made non-blocking, so each layer is shown to catch it.
+
+**Observed locally (2026-09-23).** The real v3 release image, built for
+linux/amd64 exactly as `deploy.yml` builds it, passes the smoke test: 80 rows,
+0 mismatched, max 0.60 min. The drill image fails 5 checks: `degraded`,
+`fallback-v3` not `v3`, `/health/ready` 503 "feature list mismatch", fixture
+58.77 vs 66.75, 58/80 rows off (max 59.58 min). Under the old workflow that
+image would have gone live. The runs on AWS are pending the one-time
+migration (`iam.sh`, `ecr.sh`, `lambda.sh <live image> v3`).
+
 ## Consequences
 
 - The 900 MB image is the main cold-start cost; slimming (no pyarrow at
