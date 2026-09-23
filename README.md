@@ -36,7 +36,7 @@ Full diagram and the real-vs-scripted table: [`docs/architecture.md`](docs/archi
 |---|---|
 | **Data** | 2024-10 … 2025-01 yellow months (14.6M rows) as immutable copies under DVC; per-month provenance reports; schema-drift detection at ingest |
 | **Pipeline** | `dvc repro`: validate (ADR-0002 rules with per-rule counts) → prepare (ADR-0003 rolling split, ADR-0005 features, post-trip columns dropped) → train (HGBR + fallback table, MLflow run) → evaluate (MAE/MAPE/RMSE/P90 for model and fallback; by hour and borough pair) |
-| **Result** | champion v3: test MAE **3.79 min** on 2025-01 vs fallback 3.99; reproduced from a clean clone at 1e-9 |
+| **Result** | serving champion v3: test MAE **3.79 min** on 2025-01 vs fallback 3.99 (trained on macOS arm64, before the canonical environment). The committed pipeline outputs (test 2025-04: model 3.51, fallback 3.88) reproduce bit-for-bit from a clean clone in the canonical training environment (`reproduce.yml` run 35830238679) |
 | **Registry** | MLflow on Compose; `make register` / `make promote` / `make rollback` with a gate (same-month or prospective MAE, beats fallback); `docs/promotions.md` |
 | **Serving** | FastAPI in a 900 MB `python:3.12-slim` image with the Lambda Web Adapter; fallback when the model cannot load; 422 with field messages for every bad input; one JSON log line per request |
 | **CI** | lint, mypy, 104 tests (fuzz, parity, reproducibility), docker build, container smoke; branch protection blocks a red PR (PR #12) |
@@ -70,13 +70,13 @@ make pipeline-smoke        # whole pipeline on tests/fixtures with SQLite MLflow
 
 make compose-up            # postgres + mlflow (http://localhost:5001) + api (http://localhost:8080)
 make ingest MONTH=2025-02  # 404 until TLC publishes; idempotent via ETag
-make pipeline              # dvc repro; logs a run to MLflow
+make pipeline              # dvc repro in the canonical training env (Docker, linux/amd64); logs a run to MLflow
 make register              # refuses on dirty git / stale dvc
 make promote VERSION=3 REASON="..."
 make rollback REASON="..."
 make registry-status
 make docker-build-champion # fetch champion by md5 from the DVC remote, build tripduration:champion
-make reproduce             # fresh clone → dvc pull → dvc repro → metrics identical (exit criterion 1)
+make reproduce [REV=sha]   # fresh clone → dvc pull → repro in train env, no network → bit-identical vs the commit (exit criterion 1)
 make verify-raw            # md5 of every raw month vs its ingest report
 uv run python scripts/deploy_check.py --url http://localhost:8080 --malformed --cold
 ```

@@ -33,7 +33,7 @@
 | piece | state |
 |---|---|
 | ingest, DVC tracking, 4 months (2024-10 … 2025-01) | real; remote is a local directory until S3 exists |
-| validate → prepare → train → evaluate | real; `dvc repro` 2–4 min; reproduced from a clean clone at 1e-9 |
+| validate → prepare → train → evaluate | real; `dvc repro` 2–4 min; runs in the canonical training env (`scripts/train_env.sh`); reproduced bit-for-bit from a clean clone (`reproduce.yml`) |
 | MLflow registry on Compose | real; versions 1–3, champion = 3 |
 | promote / rollback | real, local (`docs/promotions.md`) |
 | FastAPI image, Compose `api` | real; CI builds and smoke-tests it on every PR |
