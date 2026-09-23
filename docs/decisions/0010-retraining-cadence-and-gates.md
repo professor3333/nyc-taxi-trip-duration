@@ -60,10 +60,21 @@ previous candidate, so rejecting a model blocked all later data.
 - **Merging accepts data, never serves.** Merging a candidate updates main's
   data and pipeline outputs; serving changes only through `champion.json`
   (ADR-0007). A model-rejected candidate should still be merged if its data is
-  sound. `retrain.yml` dispatches `ci.yml` on the candidate branch, because a
-  PR opened with `GITHUB_TOKEN` gets no `pull_request` run and could otherwise
-  never satisfy branch protection.
+  sound. A PR opened by `GITHUB_TOKEN` gets its `pull_request` `ci` run held
+  at `action_required`; approving it (`make approve-ci BRANCH=retrain/<M>`) is
+  part of the human's data-acceptance step. (Tried and rejected: dispatching
+  `ci.yml` on the branch. The run passes on the right commit, but its check
+  suite is not linked to the PR, so branch protection still says BLOCKED.)
 - **Drift issues** are de-duplicated per month (comment on the open one).
+
+**Observed (2026-09-23).** PR #24 (2025-02) left open, labelled
+`candidate-failed` + `model-rejected`. Dispatching `month=2025-02` twice:
+runs `35813958744` and `35814056521`, `plan` green, `train` skipped, reason
+"already a candidate in PR #24". Default dispatch `35813971036`: plan chose
+2025-03 carrying 2025-02, trained on 2024-10..2025-01 / val 2025-02 / test
+2025-03, opened PR #43 (gate PASS, 3.5186 vs champion 3.6454) and commented on
+#24. A third concurrent dispatch (`35813964651`) was cancelled by GitHub while
+pending: only one pending run per concurrency group.
 
 **Consequences.** A later candidate can carry earlier months: merge the newest
 and close the older PRs it names. If an older one is merged first, the newer

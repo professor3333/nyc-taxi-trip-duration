@@ -44,7 +44,8 @@ git add models/champion.json docs/promotions.md && git commit -m "Roll back cham
 `retrain.yml` plans first (read-only) and trains only if the plan says so; its
 job summary states why. Two decisions per candidate PR:
 
-- **Data.** Merge the PR to accept the month into `main`. Until then the next
+- **Data.** `make approve-ci BRANCH=retrain/YYYY-MM` (GitHub holds CI on
+  bot-opened PRs), then merge the PR to accept the month into `main`. Until then the next
   run carries its `.dvc` pointer forward, so leaving it open never blocks the
   next month. Label `data-rejected` if the data itself is wrong; later months
   then wait. Fix: `gh workflow run retrain.yml -f month=YYYY-MM -f rebuild=true`.
