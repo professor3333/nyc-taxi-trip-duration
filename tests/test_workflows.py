@@ -30,3 +30,13 @@ def test_workflow_runs_steps_with_pipefail(path: Path) -> None:
             assert shell in (None, "bash"), (
                 f"{path.name}:{name} step overrides shell={shell}"
             )
+
+
+def test_retrain_preserves_its_tracking_run() -> None:
+    """The CI run's SQLite store is disposable; its record must not be."""
+    wf = next(p for p in WORKFLOWS if p.name == "retrain.yml").read_text()
+    repro = wf.index("dvc repro")
+    export = wf.index("scripts/export_run.py")
+    commit = wf.index("git add data/raw/yellow/ dvc.lock metrics/ reports/")
+    assert repro < export < commit  # exported after training, before the commit
+    assert "actions/upload-artifact@v4" in wf and "ci-mlflow.db" in wf

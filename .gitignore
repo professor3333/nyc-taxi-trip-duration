@@ -37,3 +37,6 @@ data/quarantine/
 
 # promote.py transaction staging + journal (present only mid-operation)
 models/.promotion/
+
+# registry_backup.py output (offsite copy: S3 backups/registry/)
+backups/

@@ -75,6 +75,7 @@ if __name__ == "__main__":
             s = promote(uri, args.version, reason=args.reason, force=args.force)
             print(f"promoted: champion is now v{s.version} (was v{s.previous_version})")
         print("next: commit models/champion.json and docs/promotions.md")
+        print("then: make registry-backup (the registry itself lives only here)")
     except RegistryError as e:
         print(f"refused: {e}", file=sys.stderr)
         sys.exit(2)

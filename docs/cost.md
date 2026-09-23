@@ -13,6 +13,7 @@ list prices against **measured** quantities where they exist.
 | resource | unit price (us-east-1) | quantity (est.) | monthly (est.) |
 |---|---|---|---|
 | S3 standard storage — DVC remote (17 objects, **measured** 793 MB) | $0.023/GB | 0.79 GB | $0.018 |
+| S3 standard storage — registry backups (`backups/registry/`, **measured** 22 MB each) | $0.023/GB | 1 backup (0.02 GB) | < $0.001 |
 | S3 requests | $0.005/1k PUT, $0.0004/1k GET | few hundred | < $0.01 |
 | ECR storage (**measured** 206 MB/image, lifecycle keeps 5) | $0.10/GB | ≤ 1.0 GB | ≤ $0.10 |
 | Lambda requests | $0.20/M | ~1k | < $0.01 |

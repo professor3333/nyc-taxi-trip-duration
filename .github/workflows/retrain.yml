@@ -175,6 +175,23 @@ jobs:
           scripts/train_env.sh uv run --locked dvc repro
           uv run dvc push -q
 
+      # The tracking store is SQLite on this runner and dies with it. The
+      # exported record (params, metric history, tags, artifact md5s) is
+      # committed with the candidate and linked by register.py; the raw store
+      # is kept as a run artifact for 90 days.
+      - name: Export the training run
+        run: scripts/train_env.sh uv run --locked python scripts/export_run.py
+
+      - name: Keep the raw tracking store
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracking-${{ env.M }}
+          path: |
+            ci-mlflow.db
+            mlruns/
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Prospective evaluation of the champion
         id: prospective
         run: |

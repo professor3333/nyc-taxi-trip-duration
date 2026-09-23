@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -55,6 +55,12 @@ register:     ## Register current DVC outputs as a new model version (refuses di
 
 promote:      ## Promote a version: make promote VERSION=2 REASON="beats v1 on 2024-12"
 	uv run python scripts/promote.py --version $(VERSION) --reason "$(REASON)"
+
+registry-backup: ## Dump the local registry (Postgres + artifacts + manifest) to backups/ and S3
+	uv run python scripts/registry_backup.py --upload s3://$${S3_BUCKET:-nyc-taxi-trip-duration-560512681455}/backups/registry
+
+registry-restore-check: ## Restore FROM=<dir|s3://...> into a scratch project and verify it: make registry-restore-check FROM=...
+	uv run python scripts/registry_restore.py --from "$(FROM)" --check
 
 promote-recover: ## Finish an interrupted promote/rollback/refresh (see docs/runbook.md)
 	uv run python scripts/promote.py --recover
