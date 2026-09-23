@@ -159,4 +159,16 @@ make setup && uv run dvc pull && make test && make reproduce
 
 ## Teardown
 
-`deploy/aws/teardown.sh` (asks once; keeps the budget). Record the date in `docs/cost.md`. "Off" is a valid state.
+Planned for before **2027-03-22**, when the account's Free plan ends (`docs/cost.md`). The bucket holds the only remote copy of the DVC data and the registry backups, so archive it first:
+
+```
+make registry-backup                                  # latest registry state into the bucket
+aws s3 sync s3://nyc-taxi-trip-duration-560512681455 ~/archive/nyc-taxi-s3   # everything: dvc/, backups/
+ARCHIVE_DIR=~/archive/nyc-taxi-s3 deploy/aws/teardown.sh                     # refuses if the archive is smaller than the bucket; asks once
+```
+
+Then record the date in `docs/cost.md`. "Off" is a valid state. To come back:
+1. Recreate the resources (Deploy, above).
+2. `aws s3 sync ~/archive/nyc-taxi-s3 s3://<new bucket>`.
+3. Point `.dvc/config` at the new bucket.
+4. `registry_restore.py --from s3://<new bucket>/backups/registry/<stamp> --project nyc-taxi-trip-duration --port 5001 --overwrite`.
