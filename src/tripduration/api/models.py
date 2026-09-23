@@ -117,6 +117,9 @@ class VersionResponse(BaseModel):
     train_months: list[str]
     feature_count: int
     loaded_at: str
+    # Content id of the release (model + references + code + deps + config);
+    # None for a dev build without release.json. See tripduration.release.
+    release_id: str | None = None
 
 
 class ErrorDetail(BaseModel):

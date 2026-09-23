@@ -309,6 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             train_months=list(p.meta.get("train_months", [])),
             feature_count=len(p.meta.get("feature_columns", [])),
             loaded_at=p.loaded_at,
+            release_id=p.release_id,
         )
 
     # Kept so a rollout never has a window where probes 404. `/health` is the

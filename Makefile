@@ -68,9 +68,11 @@ serve:        ## Run the API locally from the working tree (models/, data/refere
 docker-build: ## Build the serving image from local models/ (stamps git sha)
 	docker build --build-arg GIT_SHA=$$(git rev-parse HEAD) -t tripduration:dev .
 
-docker-build-champion: ## Fetch champion artefacts from the DVC remote and build the deploy image
+docker-build-champion: ## Fetch champion artefacts + references, write release.json, build the release image
 	uv run python scripts/fetch_champion.py
+	uv run python scripts/release_manifest.py --commit $$(git rev-parse HEAD)
 	docker build --build-arg MODELS_SRC=build/champion/models --build-arg REFERENCE_SRC=build/champion/reference \
+	  --build-arg HOLIDAYS_SRC=build/champion/reference/holidays.csv \
 	  --build-arg GIT_SHA=$$(git rev-parse HEAD) \
 	  --build-arg MODEL_VERSION=v$$(uv run python -c "import json;print(json.load(open('models/champion.json'))['version'])") \
 	  -t tripduration:champion .

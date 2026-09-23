@@ -44,6 +44,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--month", required=True)
     ap.add_argument("--models-dir", type=Path, default=Path("build/champion/models"))
+    # The champion's packaged references (fetch_champion.py), not the working
+    # tree's: the champion is scored exactly as it serves.
+    ap.add_argument(
+        "--reference-dir", type=Path, default=Path("build/champion/reference")
+    )
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
     ap.add_argument("--out-dir", type=Path, default=Path("reports/monitoring"))
     args = ap.parse_args()
@@ -61,7 +66,7 @@ def main() -> int:
         return 2
 
     ref = ReferenceData.load(
-        params.data.reference_dir / "zone_centroids.csv", Path("configs/holidays.csv")
+        args.reference_dir / "zone_centroids.csv", args.reference_dir / "holidays.csv"
     )
     frame = pq.read_table(
         params.data.validated_dir / f"{args.month}.parquet",

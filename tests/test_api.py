@@ -400,7 +400,9 @@ def test_endpoint_table(client: TestClient) -> None:
         "train_months",
         "feature_count",
         "loaded_at",
+        "release_id",
     }
+    assert v["release_id"] is None  # dev build: no release.json
     assert v["model_kind"] == "model" and v["feature_count"] == 12
     assert v["fallback_version"].startswith("fb-")
     assert v["train_months"] == ["2024-10"]
@@ -526,3 +528,15 @@ def test_parity_offline_pipeline_vs_api(client: TestClient, model_dir: Path) -> 
     ]
     batch = client.post("/predict/batch", json={"items": items}).json()["predictions"]
     assert batch == [round(float(x), 2) for x in offline[:5]]
+
+
+def test_version_reports_the_packaged_release_id(
+    model_dir: Path, tmp_path: Path
+) -> None:
+    """A deploy image carries release.json; /version names the release, so a
+    rollback can be proven to have restored the same one."""
+    d = tmp_path / "models"
+    shutil.copytree(model_dir, d)
+    (d / "release.json").write_text(json.dumps({"release_id": "ab" * 32}))
+    with TestClient(create_app(_settings(d))) as c:
+        assert c.get("/version").json()["release_id"] == "ab" * 32

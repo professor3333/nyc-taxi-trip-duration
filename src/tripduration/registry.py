@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import pickle
 import platform
+import shutil
 import subprocess
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,12 +28,18 @@ import mlflow
 import yaml
 from mlflow import MlflowClient
 
+log = logging.getLogger(__name__)
+
 MODEL_NAME = "nyc-taxi-trip-duration"
 CHAMPION = "champion"
 CHALLENGER = "challenger"
 CHAMPION_FILE = Path("models/champion.json")
 CHAMPION_META_FILE = Path("models/champion_meta.json")
 CHAMPION_FIXTURE_FILE = Path("models/champion_fixture.csv")
+# The champion's own holidays file, in git next to champion.json: it is not
+# DVC-tracked, and the commit that trained a model is unreachable after a
+# squash merge, so it must travel with the release record.
+CHAMPION_HOLIDAYS_FILE = Path("models/champion_holidays.csv")
 # Reference data the champion's predictions are rebuilt with. Module-level so
 # a test can point them at tests/fixtures/ without DVC-tracked data present.
 REFERENCE_CSV = Path("data/reference/zone_centroids.csv")
@@ -43,6 +52,8 @@ ARTEFACTS = (
     "models/model_meta.json",
 )
 EXTRA_ARTEFACTS = ("metrics/eval.json", "params.yaml", "dvc.lock")
+REFERENCE_ARTEFACT_DIR = "reference"  # per version, under these fixed names:
+CENTROIDS_NAME, HOLIDAYS_NAME = "zone_centroids.csv", "holidays.csv"
 
 
 class RegistryError(RuntimeError):
@@ -82,6 +93,11 @@ class ChampionState:
     # where it was computed. Measured arm64 vs x86_64: mean 0.043 min, max
     # 0.597 min over the 80-row grid. See docs/reproducibility.md.
     fixture_platform: str = ""
+    # md5 of the champion's holidays file (models/champion_holidays.csv).
+    holidays_md5: str = ""
+    # What wrote this record: promote | rollback | refresh. deploy.yml restores
+    # the retained, verified image for a rollback instead of rebuilding.
+    action: str = ""
 
     @classmethod
     def read(cls, path: Path = CHAMPION_FILE) -> ChampionState | None:
@@ -181,6 +197,10 @@ def register(
         "fallback_md5": lock["models/fallback_table.parquet"],
         "train_run_id": meta.get("mlflow_run_id", ""),
         "stage": "register",
+        # The reference data this version was trained and evaluated with,
+        # packaged with it so promote/rollback never borrow the working tree's.
+        "reference_md5": file_md5(REFERENCE_CSV),
+        "holidays_md5": file_md5(HOLIDAYS_CSV),
     }
     client = MlflowClient()
     with mlflow.start_run(run_name=f"register {sha[:8]}") as run:
@@ -197,6 +217,15 @@ def register(
             mlflow.log_artifact(path, artifact_path="models")
         for path in EXTRA_ARTEFACTS:
             mlflow.log_artifact(path, artifact_path="provenance")
+        with tempfile.TemporaryDirectory() as tmp:
+            for src, name in (
+                (REFERENCE_CSV, CENTROIDS_NAME),
+                (HOLIDAYS_CSV, HOLIDAYS_NAME),
+            ):
+                shutil.copyfile(src, Path(tmp) / name)
+                mlflow.log_artifact(
+                    str(Path(tmp) / name), artifact_path=REFERENCE_ARTEFACT_DIR
+                )
         source = f"{run.info.artifact_uri}/models"
         run_id = run.info.run_id
     try:
@@ -309,11 +338,67 @@ def _log_promotion(line: str, log_path: Path = PROMOTIONS_LOG) -> None:
         fh.write(line + "\n")
 
 
+@dataclass(frozen=True)
+class VersionReferences:
+    centroids: Path
+    holidays: Path
+    reference_md5: str
+    holidays_md5: str
+    packaged: bool  # False: a legacy version, served with the working tree's files
+
+
+def version_references(
+    client: MlflowClient, version: int, model_name: str
+) -> VersionReferences:
+    """The reference files a registered version was built with.
+
+    Versions registered since 2026-09-23 carry them as artefacts, verified
+    against their md5 tags. Older versions (v1-v3) do not; for those the
+    working tree's files are used and the fact is logged with their md5s.
+    Both files have had exactly one version in git history (introduced
+    together in 3c947b5), so for v1-v3 that is provably what they used.
+    """
+    mv = client.get_model_version(model_name, str(version))
+    tags = mv.tags or {}
+    if tags.get("reference_md5") and tags.get("holidays_md5") and mv.run_id:
+        local = Path(client.download_artifacts(mv.run_id, REFERENCE_ARTEFACT_DIR))
+        refs = VersionReferences(
+            centroids=local / CENTROIDS_NAME,
+            holidays=local / HOLIDAYS_NAME,
+            reference_md5=tags["reference_md5"],
+            holidays_md5=tags["holidays_md5"],
+            packaged=True,
+        )
+        for path, want in (
+            (refs.centroids, refs.reference_md5),
+            (refs.holidays, refs.holidays_md5),
+        ):
+            if file_md5(path) != want:
+                raise RegistryError(f"version {version}: {path.name} md5 != tag {want}")
+        return refs
+    refs = VersionReferences(
+        centroids=REFERENCE_CSV,
+        holidays=HOLIDAYS_CSV,
+        reference_md5=file_md5(REFERENCE_CSV),
+        holidays_md5=file_md5(HOLIDAYS_CSV),
+        packaged=False,
+    )
+    log.warning(
+        "version %s predates packaged references; using working-tree files "
+        "(zone_centroids md5 %s, holidays md5 %s)",
+        version,
+        refs.reference_md5,
+        refs.holidays_md5,
+    )
+    return refs
+
+
 def save_champion_fixture(
     client: MlflowClient,
     version: int,
     model_name: str,
     dest: Path = CHAMPION_FIXTURE_FILE,
+    refs: VersionReferences | None = None,
 ) -> str:
     """Write this version's predictions on the fixed request grid, and hash them.
 
@@ -338,7 +423,8 @@ def save_champion_fixture(
     with (local / "model.pkl").open("rb") as fh:
         model = pickle.load(fh)  # noqa: S301 - our own registered artefact
     fb = FallbackTable.load(local / "fallback_table.parquet")
-    ref = ReferenceData.load(REFERENCE_CSV, HOLIDAYS_CSV)
+    refs = refs or version_references(client, version, model_name)
+    ref = ReferenceData.load(refs.centroids, refs.holidays)
     frame: pd.DataFrame = fixture_predictions(model, fb, ref)
     dest.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(dest, index=False)
@@ -364,14 +450,25 @@ def save_champion_meta(
     dest.write_text(Path(local).read_text())
 
 
-def _reference_md5(
-    pointer: Path = Path("data/reference/zone_centroids.csv.dvc"),
-) -> str:
-    """md5 of the zone centroids, from its .dvc pointer (not a pipeline output)."""
-    if not pointer.exists():
-        return ""
-    outs = yaml.safe_load(pointer.read_text()).get("outs", [])
-    return str(outs[0]["md5"]) if outs else ""
+def _release_fields(
+    client: MlflowClient,
+    version: int,
+    model_name: str,
+    fixture_file: Path,
+    holidays_file: Path,
+) -> dict[str, str]:
+    """The champion record's reference and fixture fields, all from ``version``."""
+    refs = version_references(client, version, model_name)
+    holidays_file.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(refs.holidays, holidays_file)
+    return {
+        "reference_md5": refs.reference_md5,
+        "holidays_md5": refs.holidays_md5,
+        "fixture_sha256": save_champion_fixture(
+            client, version, model_name, fixture_file, refs
+        ),
+        "fixture_platform": f"{platform.system()}-{platform.machine()}",
+    }
 
 
 def _row(
@@ -397,6 +494,7 @@ def promote(
     meta_file: Path = CHAMPION_META_FILE,
     fixture_file: Path = CHAMPION_FIXTURE_FILE,
     monitoring_dir: Path = Path("reports/monitoring"),
+    holidays_file: Path = CHAMPION_HOLIDAYS_FILE,
 ) -> ChampionState:
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
@@ -433,11 +531,10 @@ def promote(
         promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
         previous_version=current.version if current else None,
         reason=reason,
-        reference_md5=_reference_md5(),
         train_months=tuple(t for t in (chal.get("train_months") or "").split(",") if t),
         dvc_lock_md5=chal.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(client, version, model_name, fixture_file),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
+        action="promote",
+        **_release_fields(client, version, model_name, fixture_file, holidays_file),
     )
     state.write(champion_file)
     save_champion_meta(client, version, model_name, meta_file)
@@ -454,6 +551,7 @@ def refresh(
     champion_file: Path = CHAMPION_FILE,
     meta_file: Path = CHAMPION_META_FILE,
     fixture_file: Path = CHAMPION_FIXTURE_FILE,
+    holidays_file: Path = CHAMPION_HOLIDAYS_FILE,
 ) -> ChampionState:
     """Rewrite the current champion's release record without touching aliases.
 
@@ -480,13 +578,12 @@ def refresh(
         promoted_at=current.promoted_at,
         previous_version=current.previous_version,
         reason=current.reason,
-        reference_md5=_reference_md5(),
         train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
         dvc_lock_md5=tags.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(
-            client, current.version, model_name, fixture_file
+        action=current.action or "refresh",
+        **_release_fields(
+            client, current.version, model_name, fixture_file, holidays_file
         ),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
     )
     state.write(champion_file)
     save_champion_meta(client, current.version, model_name, meta_file)
@@ -502,6 +599,7 @@ def rollback(
     log_path: Path = PROMOTIONS_LOG,
     meta_file: Path = CHAMPION_META_FILE,
     fixture_file: Path = CHAMPION_FIXTURE_FILE,
+    holidays_file: Path = CHAMPION_HOLIDAYS_FILE,
 ) -> ChampionState:
     """Set champion back to the previous version recorded in champion.json."""
     mlflow.set_tracking_uri(tracking_uri)
@@ -532,11 +630,10 @@ def rollback(
         promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
         previous_version=current.version,
         reason=reason,
-        reference_md5=_reference_md5(),
         train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
         dvc_lock_md5=tags.get("dvc_lock_md5", ""),
-        fixture_sha256=save_champion_fixture(client, prev, model_name, fixture_file),
-        fixture_platform=f"{platform.system()}-{platform.machine()}",
+        action="rollback",
+        **_release_fields(client, prev, model_name, fixture_file, holidays_file),
     )
     state.write(champion_file)
     save_champion_meta(client, prev, model_name, meta_file)

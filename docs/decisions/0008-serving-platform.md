@@ -104,10 +104,9 @@ built with a *fixture* model: the real champion image first ran in production.
   moving `live`, it verifies again. On failure or cancellation it moves `live`
   back, verifies the restore, and fails the run. The release record is a run
   artifact.
-- **Rollback targets are kept.** ECR lifecycle rule 1 keeps the last 5
-  release images (`v*` tags). A higher-priority rule's images cannot be
-  expired by a lower one, so rule 2 (3 of anything else: drills, untagged)
-  never pushes a rollback target out.
+- **Rollback targets are kept.** Superseded by ADR-0012: the live and
+  rollback images are pinned by `keep-<digest>` tags that never expire,
+  rather than trusting a keep-the-last-N count.
 - **CI's permissions** gain `PublishVersion`, `GetAlias`, `UpdateAlias` and
   `ListVersionsByFunction`, and cover qualified ARNs (`function:NAME:*`). CI
   cannot create or delete aliases, or delete versions.

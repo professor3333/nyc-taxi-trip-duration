@@ -1,24 +1,25 @@
 name: deploy
 
-# Deploys when the champion pointer changes on main (promotion or rollback),
-# or by hand. Every gate runs BEFORE traffic moves, and a failure after it
-# moves is undone automatically (ADR-0008 amendment 2026-09-23):
+# A release is the immutable combination of model, references, code,
+# dependencies, configuration and base images (release.json, content id
+# `release_id`), realised as ONE image digest (ADR-0012). This workflow either
 #
-#   1. build the release image with the champion's artefacts (not pushed)
-#   2. smoke-test THAT image on the runner: version, 80-row fixture, 422s
-#   3. push the same bytes; prove the pushed digest is the tested image
-#   4. record the release being replaced (alias `live` -> version, image);
-#      refuse if its image is gone from ECR (no rollback target)
-#   5. stage on $LATEST, publish an immutable version - no traffic on it
-#   6. verify that version by invoking it directly
-#   7. move alias `live` (the only thing serving traffic) to it
-#   8. verify `live`; on failure or cancellation, move `live` back to the
-#      recorded version, verify the restore, and fail the run
+#   BUILD   - a new champion (promotion) or a code change: build the release,
+#             smoke-test that exact image, push it, publish it as a Lambda
+#             version, verify the version with no traffic, then activate; or
+#   RESTORE - a rollback (champion.json action=rollback, or `release_id`
+#             input): re-activate a *previously verified* release - its image
+#             digest, its Lambda version - with no rebuild, and require it to
+#             serve exactly the predictions recorded when it was verified.
 #
-# `drill` (dispatch only) deploys a deliberately incompatible artefact - a
-# model_meta.json whose feature list does not match the code - and makes the
-# named gates non-blocking so the next layer has to catch it. See
-# docs/recovery.md for the observed runs.
+# Both then: record the release being replaced, move alias `live` (the only
+# thing serving traffic), verify live, and on failure or cancellation move
+# `live` back and verify that (ADR-0008 amendment). A verified BUILD is written
+# to the release ledger (s3://$S3_BUCKET/releases/<release_id>.json). ECR
+# images of the live and rollback releases are tagged keep-* and never expire.
+#
+# `drill` (dispatch only) deploys a deliberately incompatible artefact past 0,
+# 1 or 2 gates. See docs/recovery.md for the observed runs.
 
 on:
   push:
@@ -27,8 +28,12 @@ on:
       - models/champion.json        # the pointer: promote or rollback
       - models/champion_meta.json   # the champion's feature list; also baked in
       - models/champion_fixture.csv # this version's predictions, checked after deploy
+      - models/champion_holidays.csv
   workflow_dispatch:
     inputs:
+      release_id:
+        description: "Restore this previously verified release (no rebuild)"
+        required: false
       drill:
         description: "Recovery drill with an incompatible artefact"
         type: choice
@@ -54,11 +59,13 @@ jobs:
     env:
       FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
       REPO: ${{ secrets.ECR_REPOSITORY }}
+      BUCKET: ${{ secrets.S3_BUCKET }}
       DRILL: ${{ inputs.drill || 'none' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0   # fetch_champion.py reads models/model_meta.json at the champion sha
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -77,73 +84,136 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Read champion
+      - name: Decide - build a new release or restore a verified one
+        env:
+          RELEASE_INPUT: ${{ inputs.release_id }}
         run: |
-          echo "VERSION=v$(jq -r .version models/champion.json)" >> "$GITHUB_ENV"
-          echo "MODEL_SHA=$(jq -r .git_sha models/champion.json)" >> "$GITHUB_ENV"
+          VERSION="v$(jq -r .version models/champion.json)"
+          ACTION=$(jq -r '.action // ""' models/champion.json)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ -n "$RELEASE_INPUT" ]; then
+            MODE=restore; RID="$RELEASE_INPUT"
+          elif [ "$ACTION" = "rollback" ] && [ "$DRILL" = "none" ]; then
+            # Roll back to the release that served this model, not a rebuild
+            # of it with today's code, lock, references and base image.
+            if ! RID=$(uv run python scripts/releases.py find --bucket "$BUCKET" --model "$VERSION"); then
+              echo "::error::champion.json is a rollback to $VERSION, but no verified release of $VERSION is recorded. Refusing to rebuild it silently: restore one by release_id, or promote $VERSION (a new release) deliberately."
+              exit 1
+            fi
+            MODE=restore
+          else
+            MODE=build; RID=""
+          fi
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=$RID" >> "$GITHUB_ENV"
+          echo "### Mode: \`$MODE\` for \`$VERSION\` ${RID:+(release \`$RID\`)}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fetch champion artefacts from the DVC remote (S3)
+      # --- RESTORE: the recorded image and version, nothing rebuilt ----------------
+
+      - name: "Restore: load the release record"
+        if: env.MODE == 'restore'
+        run: |
+          uv run python scripts/releases.py get --bucket "$BUCKET" --release-id "$RELEASE_ID" --out restore.json
+          IMAGE_URI=$(jq -r .image_uri restore.json)
+          VERSION=$(jq -r .model_version restore.json)
+          jq -r .served_fixture_csv restore.json > expected_fixture.csv
+          # The retained image must still exist; the keep-* ECR rule is what
+          # guarantees this for the live and rollback releases.
+          aws ecr describe-images --repository-name "$REPO" --image-ids imageDigest="${IMAGE_URI#*@}" >/dev/null \
+            || { echo "::error::release $RELEASE_ID's image ${IMAGE_URI#*@} is gone from ECR"; exit 1; }
+          # Its own Lambda version if it still runs that image; else publish
+          # the same digest again (a version is just a pointer to it).
+          NEW=$(jq -r .lambda_version restore.json)
+          if [ "$(aws lambda get-function --function-name "$FN" --qualifier "$NEW" --query Code.ImageUri --output text 2>/dev/null)" != "$IMAGE_URI" ]; then
+            aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
+            aws lambda wait function-updated --function-name "$FN"
+            NEW=$(aws lambda publish-version --function-name "$FN" \
+              --description "model=$VERSION release=${RELEASE_ID:0:12} restored" --query Version --output text)
+            aws lambda wait published-version-active --function-name "$FN" --qualifier "$NEW"
+          fi
+          {
+            echo "IMAGE_URI=$IMAGE_URI"
+            echo "VERSION=$VERSION"
+            echo "NEW_VERSION=$NEW"
+            echo "EXPECTED_FIXTURE=expected_fixture.csv"
+            echo "FIXTURE_TOLERANCE=0"   # same image, same arch: identical output
+          } >> "$GITHUB_ENV"
+          echo "restoring release $RELEASE_ID: image $IMAGE_URI as Lambda version $NEW"
+
+      # --- BUILD: a new release ----------------------------------------------------
+
+      - name: "Build: fetch champion artefacts and references (DVC remote, by hash)"
+        if: env.MODE == 'build'
         run: uv run python scripts/fetch_champion.py
 
       - name: "Drill: make the artefact incompatible"
-        if: env.DRILL != 'none'
+        if: env.MODE == 'build' && env.DRILL != 'none'
         run: |
           M=build/champion/models/model_meta.json
           jq '.feature_columns += ["drill_incompatible_feature"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
           echo "::warning::DRILL $DRILL: model_meta.json feature list no longer matches the code"
 
-      - name: Build the release image (local only)
+      - name: "Build: release manifest and image (local only)"
+        if: env.MODE == 'build'
         run: |
+          RID=$(uv run python scripts/release_manifest.py --commit ${{ github.sha }})
+          {
+            echo "RELEASE_ID=$RID"
+            echo "EXPECTED_FIXTURE=models/champion_fixture.csv"
+            echo "FIXTURE_TOLERANCE=1.0"  # grid recorded on arm64
+          } >> "$GITHUB_ENV"
           # Lambda rejects OCI manifests: no provenance/SBOM attestations.
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load \
             --build-arg MODELS_SRC=build/champion/models \
             --build-arg REFERENCE_SRC=build/champion/reference \
+            --build-arg HOLIDAYS_SRC=build/champion/reference/holidays.csv \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg MODEL_VERSION="$VERSION" \
+            --label release.id="$RID" \
             -t release:candidate .
+          echo "### Release \`$RID\`" >> "$GITHUB_STEP_SUMMARY"
+          { echo '```json'; jq .components build/champion/models/release.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Smoke-test the release image before it leaves the runner
+      - name: "Build: smoke-test the release image before it leaves the runner"
+        if: env.MODE == 'build'
         continue-on-error: ${{ env.DRILL == 'incompatible-past-smoke' || env.DRILL == 'incompatible-to-live' }}
         run: |
           docker run -d --name release -p 8080:8080 release:candidate
           for _ in $(seq 1 60); do curl -sf localhost:8080/health/live >/dev/null && break; sleep 2; done
-          # Same architecture as Lambda (linux/amd64), so the offline fixture
-          # value must match exactly; the 80-row grid uses the 1.0 min
-          # cross-architecture tolerance (it was recorded on arm64).
           uv run python scripts/deploy_check.py --url http://localhost:8080 \
-            --expect-version "$VERSION" \
-            --expect-fixture models/champion_fixture.csv \
+            --expect-version "$VERSION" --expect-release "$RELEASE_ID" \
+            --expect-fixture "$EXPECTED_FIXTURE" --fixture-tolerance "$FIXTURE_TOLERANCE" \
             --models-dir build/champion/models --reference-dir build/champion/reference \
             --malformed \
           || { echo "--- container log (tail)"; docker logs release 2>&1 | tail -20; exit 1; }
 
       - uses: aws-actions/amazon-ecr-login@v2
+        if: env.MODE == 'build'
         id: ecr
 
-      - name: Push the tested image (same bytes)
+      - name: "Build: push the tested image (same bytes)"
+        if: env.MODE == 'build'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           IMAGE="$REGISTRY/$REPO"
-          # The repository is IMMUTABLE, so every tag is unique. Release tags
-          # start with "v" (protected by the ECR lifecycle rule); drill images
-          # start with "drill-" and are cleaned up first.
-          if [ "$DRILL" = "none" ]; then TAG="$VERSION-${{ github.sha }}-r${{ github.run_id }}"
+          # IMMUTABLE repository: every tag is unique. Release tags start with
+          # "v" (ECR rule 2), drill images with "drill-" (rule 3).
+          if [ "$DRILL" = "none" ]; then TAG="$VERSION-${RELEASE_ID:0:12}-r${{ github.run_id }}"
           else TAG="drill-$DRILL-${{ github.run_id }}"; fi
           docker tag release:candidate "$IMAGE:$TAG"
           docker push -q "$IMAGE:$TAG"
-          # RepoDigests is what this *local* image was pushed as: the digest
-          # Lambda will run is, by construction, the image just smoke-tested.
           PUSHED=$(docker image inspect release:candidate --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep "^$IMAGE@" | head -1)
-          DIGEST=$(aws ecr describe-images --repository-name "$REPO" --image-ids imageTag="$TAG" \
-            --query 'imageDetails[0].[imageDigest,imageManifestMediaType]' --output text)
-          read -r ECR_DIGEST MEDIA <<< "$DIGEST"
+          read -r ECR_DIGEST MEDIA <<< "$(aws ecr describe-images --repository-name "$REPO" --image-ids imageTag="$TAG" \
+            --query 'imageDetails[0].[imageDigest,imageManifestMediaType]' --output text)"
           echo "pushed $PUSHED; ECR has $ECR_DIGEST ($MEDIA)"
           test "$PUSHED" = "$IMAGE@$ECR_DIGEST" || { echo "::error::ECR digest is not the tested image"; exit 1; }
           test "$MEDIA" = "application/vnd.docker.distribution.manifest.v2+json" \
             || { echo "::error::manifest is $MEDIA; Lambda needs Docker v2"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "IMAGE_URI=$IMAGE@$ECR_DIGEST" >> "$GITHUB_ENV"
+
+      # --- both: record, stage, verify, activate, verify, restore ------------------
 
       - name: Record the release being replaced
         run: |
@@ -158,56 +228,54 @@ jobs:
             echo "::error::the live release's image ${PREV_URI#*@} is gone from ECR; no rollback target, refusing to deploy"
             exit 1
           fi
-          echo "PREV_VERSION=$PREV" >> "$GITHUB_ENV"
-          echo "PREV_MODEL=$PREV_MODEL" >> "$GITHUB_ENV"
-          jq -n --arg v "$PREV" --arg m "$PREV_MODEL" --arg u "$PREV_URI" --arg d "$PREV_DESC" \
-            '{live_before: {lambda_version: $v, model: $m, image: $u, description: $d}}' > release-record.json
+          {
+            echo "PREV_VERSION=$PREV"
+            echo "PREV_MODEL=$PREV_MODEL"
+            echo "PREV_URI=$PREV_URI"
+          } >> "$GITHUB_ENV"
           {
             echo "### Release being replaced"
             echo "- alias \`live\` -> version \`$PREV\` (model \`${PREV_MODEL:-unknown}\`)"
             echo "- image \`$PREV_URI\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Stage and publish the candidate version (no traffic)
+      - name: "Build: stage and publish the candidate version (no traffic)"
+        if: env.MODE == 'build'
         run: |
           # $LATEST is a staging slot; nothing routes to it.
           aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
           aws lambda wait function-updated --function-name "$FN"
           NEW=$(aws lambda publish-version --function-name "$FN" \
-            --description "model=$VERSION commit=${{ github.sha }} tag=$TAG" --query Version --output text)
+            --description "model=$VERSION release=${RELEASE_ID:0:12} tag=$TAG" --query Version --output text)
           aws lambda wait published-version-active --function-name "$FN" --qualifier "$NEW"
-          RUNNING=$(aws lambda get-function --function-name "$FN" --qualifier "$NEW" --query Code.ImageUri --output text)
-          test "$RUNNING" = "$IMAGE_URI" || { echo "::error::version $NEW runs $RUNNING, not $IMAGE_URI"; exit 1; }
           echo "NEW_VERSION=$NEW" >> "$GITHUB_ENV"
-          jq --arg v "$NEW" --arg u "$IMAGE_URI" --arg t "$TAG" --arg m "$VERSION" \
-            '. + {candidate: {lambda_version: $v, model: $m, image: $u, tag: $t}}' release-record.json > r.tmp && mv r.tmp release-record.json
-          echo "### Candidate: version \`$NEW\`, model \`$VERSION\`, image \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify the candidate version directly (still no traffic)
         continue-on-error: ${{ env.DRILL == 'incompatible-to-live' }}
         run: |
+          RUNNING=$(aws lambda get-function --function-name "$FN" --qualifier "$NEW_VERSION" --query Code.ImageUri --output text)
+          test "$RUNNING" = "$IMAGE_URI" || { echo "::error::version $NEW_VERSION runs $RUNNING, not $IMAGE_URI"; exit 1; }
           # --invoke, not the Function URL: this account refuses Function URL
           # invocations from every principal except the root (ADR-0008).
           uv run python scripts/deploy_check.py --invoke "$FN:$NEW_VERSION" \
-            --expect-version "$VERSION" \
-            --expect-fixture models/champion_fixture.csv \
-            --models-dir build/champion/models --reference-dir build/champion/reference \
+            --expect-version "$VERSION" --expect-release "$RELEASE_ID" \
+            --expect-fixture "$EXPECTED_FIXTURE" --fixture-tolerance "$FIXTURE_TOLERANCE" \
             --malformed --cold --n 5
 
       - name: Activate - point alias live at the candidate
         run: |
-          aws lambda update-alias --function-name "$FN" --name live --function-version "$NEW_VERSION" >/dev/null
+          aws lambda update-alias --function-name "$FN" --name live --function-version "$NEW_VERSION" \
+            --description "release=$RELEASE_ID model=$VERSION" >/dev/null
           echo "ACTIVATED=true" >> "$GITHUB_ENV"
           echo "live: version $PREV_VERSION -> $NEW_VERSION"
 
-      - name: Verify live
+      - name: Verify live, and record what it serves
         id: verify
         run: |
           uv run python scripts/deploy_check.py --invoke "$FN:live" \
-            --expect-version "$VERSION" \
-            --expect-fixture models/champion_fixture.csv \
-            --models-dir build/champion/models --reference-dir build/champion/reference \
-            --malformed
+            --expect-version "$VERSION" --expect-release "$RELEASE_ID" \
+            --expect-fixture "$EXPECTED_FIXTURE" --fixture-tolerance "$FIXTURE_TOLERANCE" \
+            --record-fixture served_fixture.csv --malformed
 
       # Runs whenever traffic was moved but live was not verified: a failed
       # check, or a failure/cancellation in between.
@@ -227,17 +295,77 @@ jobs:
           echo "::error::release $NEW_VERSION failed on live and was rolled back to version $PREV_VERSION"
           exit 1
 
+      - name: Write the release to the ledger
+        if: steps.verify.outcome == 'success'
+        run: |
+          if [ "$MODE" = "restore" ]; then
+            # Same release, re-verified: keep its record, refresh the stamp.
+            jq --arg t "$(date -u +%FT%TZ)" --arg u "$RUN_URL" --arg v "$NEW_VERSION" \
+              '.verified_at = $t | .lambda_version = $v | .verified_by += [$u]' restore.json > record.json
+          else
+            jq -n --slurpfile m build/champion/models/release.json \
+              --arg id "$RELEASE_ID" --arg img "$IMAGE_URI" --arg v "$NEW_VERSION" --arg mv "$VERSION" \
+              --arg t "$(date -u +%FT%TZ)" --arg u "$RUN_URL" --arg tag "$TAG" \
+              --rawfile fx served_fixture.csv \
+              '{release_id: $id, manifest: $m[0], image_uri: $img, image_tag: $tag, lambda_version: $v,
+                model_version: $mv, verified_at: $t, verified_by: [$u], served_fixture_csv: $fx}' > record.json
+          fi
+          uv run python scripts/releases.py put --bucket "$BUCKET" --record record.json
+
+      # keep-<digest> tags pin the live and rollback images: an image matched
+      # by ECR rule 1 (keep-*, never expires) cannot be expired by the
+      # count-based rules. Every other image loses its keep tag.
+      - name: Protect the live and rollback images in ECR
+        if: always() && env.ACTIVATED == 'true'
+        run: |
+          LIVE=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text)
+          LIVE_URI=$(aws lambda get-function --function-name "$FN" --qualifier "$LIVE" --query Code.ImageUri --output text)
+          protect() {  # $1 image uri -> prints its keep tag
+            local d="${1#*@}" t manifest
+            t="keep-${d:7:16}"
+            manifest=$(aws ecr batch-get-image --repository-name "$REPO" --image-ids imageDigest="$d" \
+              --accepted-media-types application/vnd.docker.distribution.manifest.v2+json \
+              --query 'images[0].imageManifest' --output text)
+            aws ecr put-image --repository-name "$REPO" --image-tag "$t" --image-manifest "$manifest" >/dev/null 2>err.txt \
+              || grep -q ImageAlreadyExists err.txt || { cat err.txt >&2; return 1; }
+            echo "$t"
+          }
+          if [ "$LIVE_URI" = "$PREV_URI" ]; then
+            # Live did not change (the candidate was rolled back): keep every
+            # existing pin, including the older rollback target's.
+            echo "live unchanged; ensured $(protect "$LIVE_URI")"
+            exit 0
+          fi
+          KEEP="$(protect "$LIVE_URI") $(protect "$PREV_URI")"
+          echo "pinned live + rollback: $KEEP"
+          # Unpin everything else. Removing a tag never deletes an image that
+          # still has another tag, and every image carries a v*/drill-* tag.
+          # shellcheck disable=SC2016  # JMESPath literals use backticks
+          for T in $(aws ecr list-images --repository-name "$REPO" --filter tagStatus=TAGGED \
+                       --query 'imageIds[?starts_with(imageTag, `keep-`)].imageTag' --output text); do
+            case " $KEEP " in *" $T "*) continue ;; esac
+            aws ecr batch-delete-image --repository-name "$REPO" --image-ids imageTag="$T" >/dev/null
+            echo "unpinned $T"
+          done
+
       - name: Release record
         if: always()
         run: |
-          [ -f release-record.json ] || exit 0
-          LIVE=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text)
-          jq --arg l "$LIVE" '. + {live_after: $l}' release-record.json | tee release-record.final.json
-          { echo "### Release record"; echo '```json'; cat release-record.final.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          LIVE=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text 2>/dev/null || echo "?")
+          jq -n --arg mode "$MODE" --arg rid "${RELEASE_ID:-}" --arg img "${IMAGE_URI:-}" \
+            --arg cand "${NEW_VERSION:-}" --arg prev "${PREV_VERSION:-}" --arg prevm "${PREV_MODEL:-}" \
+            --arg previ "${PREV_URI:-}" --arg live "$LIVE" --arg drill "$DRILL" \
+            '{mode: $mode, release_id: $rid, image: $img, candidate_version: $cand,
+              replaced: {lambda_version: $prev, model: $prevm, image: $previ},
+              live_after: $live, drill: $drill}' | tee release-run.json
+          { echo "### Release record"; echo '```json'; cat release-run.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: release-record
-          path: release-record.final.json
+          path: |
+            release-run.json
+            record.json
+            build/champion/models/release.json
           if-no-files-found: ignore

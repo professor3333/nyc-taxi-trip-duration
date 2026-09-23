@@ -27,6 +27,7 @@ from tripduration.features import (
     ReferenceData,
     build_features,
 )
+from tripduration.release import read_release_id
 from tripduration.train import FALLBACK_FILE, META_FILE, MODEL_FILE
 
 log = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ class Predictor:
                 else "fallback"
             )
         self.champion_version = f"v{champion['version']}" if champion else None
+        self.release_id = read_release_id(settings.model_dir)
 
     @staticmethod
     def _read_champion(path: Path) -> dict[str, Any] | None:

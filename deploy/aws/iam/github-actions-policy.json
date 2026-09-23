@@ -4,7 +4,8 @@
     {"Sid": "EcrAuth", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
     {"Sid": "EcrPush", "Effect": "Allow", "Resource": "arn:aws:ecr:AWS_REGION:ACCOUNT_ID:repository/ECR_REPOSITORY",
      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload",
-                "ecr:PutImage", "ecr:UploadLayerPart", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:DescribeImages"]},
+                "ecr:PutImage", "ecr:UploadLayerPart", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:DescribeImages",
+                "ecr:ListImages", "ecr:BatchDeleteImage"]},
     {"Sid": "LambdaRelease", "Effect": "Allow",
      "Resource": ["arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME",
                   "arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME:*"],
@@ -15,6 +16,9 @@
                 "lambda:GetAlias", "lambda:UpdateAlias"]},
     {"Sid": "DvcReadModels", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],
      "Resource": ["arn:aws:s3:::S3_BUCKET", "arn:aws:s3:::S3_BUCKET/dvc/*"]},
-    {"Sid": "DvcWriteRetrain", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::S3_BUCKET/dvc/*"}
+    {"Sid": "DvcWriteRetrain", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::S3_BUCKET/dvc/*"},
+    {"Sid": "ReleaseLedger", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": "arn:aws:s3:::S3_BUCKET/releases/*"},
+    {"Sid": "ReleaseLedgerList", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::S3_BUCKET",
+     "Condition": {"StringLike": {"s3:prefix": ["releases/*", "releases/"]}}}
   ]
 }

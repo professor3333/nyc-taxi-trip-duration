@@ -223,7 +223,17 @@ def main() -> int:
     # grid — docs/reproducibility.md). Pass 1e-9 when both sides are the same
     # architecture, which is the stricter and preferable check.
     ap.add_argument("--fixture-tolerance", type=float, default=1.0)
+    ap.add_argument(
+        "--record-fixture",
+        type=Path,
+        help="write the predictions actually served for the --expect-fixture grid; "
+        "deploy.yml stores them in the release record so a rollback to this "
+        "release can be checked for identical output (--fixture-tolerance 0)",
+    )
     ap.add_argument("--allow-degraded", action="store_true")
+    ap.add_argument(
+        "--expect-release", help="release_id /version must report (release.json)"
+    )
     ap.add_argument(
         "--malformed",
         action="store_true",
@@ -251,6 +261,13 @@ def main() -> int:
 
     status, ver, _ = call(f"{base}/version", sigv4=sign, function=fn)
     check("version", status == 200, _short(ver))
+    if args.expect_release:
+        got_release = ver.get("release_id") if isinstance(ver, dict) else None
+        check(
+            "release_id",
+            got_release == args.expect_release,
+            f"{got_release} (expected {args.expect_release})",
+        )
 
     status, health, ms = call(f"{base}/health", sigv4=sign, function=fn)
     check("health reachable", status == 200, f"HTTP {status} in {ms:.0f} ms")
@@ -308,6 +325,7 @@ def main() -> int:
     if args.expect_fixture:
         rows = list(csv.DictReader(args.expect_fixture.open()))
         worst, mismatches = 0.0, 0
+        observed: list[dict[str, str]] = []
         for row in rows:
             body = json.dumps(
                 {
@@ -322,6 +340,7 @@ def main() -> int:
                 if isinstance(resp, dict) and st == 200
                 else float("nan")
             )
+            observed.append({**row, "model_min": repr(got)})
             want = round(float(row["model_min"]), 2)
             diff = abs(got - want)
             worst = max(worst, diff if diff == diff else float("inf"))
@@ -332,6 +351,12 @@ def main() -> int:
                         f"      row {row['pu_location_id']}->{row['do_location_id']} "
                         f"{row['departure_time']}: live {got} vs recorded {want}"
                     )
+        if args.record_fixture:
+            with args.record_fixture.open("w", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+                w.writeheader()
+                w.writerows(observed)
+            print(f"      served predictions recorded to {args.record_fixture}")
         check(
             f"predictions match {args.expect_fixture.name}",
             mismatches == 0,

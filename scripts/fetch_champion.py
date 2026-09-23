@@ -11,7 +11,10 @@ Every file's md5 is recomputed and compared with ``champion.json``.
 
 ``models/champion_meta.json`` (written by promote/rollback, in git) is the
 champion's ``model_meta.json``; it is copied out so the image carries the
-feature list the champion was trained with.
+feature list the champion was trained with. ``models/champion_holidays.csv``
+is the champion's holidays file, likewise in git, checked against
+``holidays_md5``. Everything under ``build/champion/reference`` is what the
+image serves with and what prospective evaluation scores with.
 """
 
 from __future__ import annotations
@@ -64,6 +67,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
     ap.add_argument("--meta", type=Path, default=Path("models/champion_meta.json"))
+    ap.add_argument(
+        "--holidays", type=Path, default=Path("models/champion_holidays.csv")
+    )
     ap.add_argument("--out", type=Path, default=Path("build/champion"))
     ap.add_argument("--repo", type=Path, default=Path("."))
     args = ap.parse_args()
@@ -85,6 +91,24 @@ def main() -> int:
         reference.mkdir(parents=True, exist_ok=True)
         shutil.copy(
             Path("data/reference/zone_centroids.csv"), reference / "zone_centroids.csv"
+        )
+
+    reference.mkdir(parents=True, exist_ok=True)
+    if champ.get("holidays_md5"):
+        got = md5(args.holidays)
+        if got != champ["holidays_md5"]:
+            raise SystemExit(
+                f"{args.holidays}: md5 {got} != champion.json {champ['holidays_md5']}"
+            )
+        shutil.copy(args.holidays, reference / "holidays.csv")
+        print(f"holidays.csv: md5 {got} ok")
+    else:
+        # Records written before 2026-09-23 have no holidays_md5. The file has
+        # one version in git history, so the working tree's is the champion's.
+        shutil.copy(Path("configs/holidays.csv"), reference / "holidays.csv")
+        print(
+            "champion.json has no holidays_md5 (legacy record); packaged the working "
+            f"tree's configs/holidays.csv, md5 {md5(reference / 'holidays.csv')}"
         )
 
     shutil.copy(args.meta, models / "model_meta.json")

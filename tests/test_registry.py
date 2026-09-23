@@ -4,6 +4,7 @@ promote -> rollback round trip, alias/file consistency."""
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,9 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
     client.create_registered_model(MODEL)
     exp = mlflow.set_experiment("t")
 
-    def add_version(**tags: Any) -> int:
+    def add_version(holidays: Path | None = None, **tags: Any) -> int:
+        """``holidays``: package reference files with the version (post-2026-09-23
+        registrations) instead of leaving it a legacy version."""
         with mlflow.start_run(experiment_id=exp.experiment_id) as run:
             # promote()/rollback() read these: model_meta.json becomes
             # models/champion_meta.json, and the model + table are what the
@@ -132,6 +135,15 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
             mlflow.log_artifact(str(meta), artifact_path="models")
             for name in ("model.pkl", "fallback_table.parquet"):
                 mlflow.log_artifact(str(tiny_artefacts / name), artifact_path="models")
+            if holidays is not None:
+                ref_dir = tmp_path / f"ref-{run.info.run_id}"
+                ref_dir.mkdir()
+                shutil.copyfile(FIXTURE_CENTROIDS, ref_dir / "zone_centroids.csv")
+                shutil.copyfile(holidays, ref_dir / "holidays.csv")
+                for f in ref_dir.iterdir():
+                    mlflow.log_artifact(str(f), artifact_path="reference")
+                tags["reference_md5"] = reg.file_md5(FIXTURE_CENTROIDS)
+                tags["holidays_md5"] = reg.file_md5(holidays)
             src = f"{run.info.artifact_uri}/models"
         mv = client.create_model_version(
             MODEL, source=src, run_id=run.info.run_id, tags=_tags(**tags)
@@ -146,6 +158,7 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
         "log": tmp_path / "promotions.md",
         "meta": tmp_path / "champion_meta.json",
         "fixture": tmp_path / "champion_fixture.csv",
+        "holidays": tmp_path / "champion_holidays.csv",
     }
 
 
@@ -158,6 +171,7 @@ def _rollback(r: dict[str, Any], **kw: Any) -> ChampionState:
         log_path=r["log"],
         meta_file=r["meta"],
         fixture_file=r["fixture"],
+        holidays_file=r["holidays"],
         **kw,
     )
 
@@ -172,6 +186,7 @@ def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
         log_path=r["log"],
         meta_file=r["meta"],
         fixture_file=r["fixture"],
+        holidays_file=r["holidays"],
         **kw,
     )
 
@@ -311,3 +326,64 @@ def test_promote_never_writes_repo_champion_files(registry: dict[str, Any]) -> N
         assert (p.read_bytes() if p.exists() else None) == content, (
             f"{p} was modified by a test"
         )
+
+
+# --- a version's own reference data --------------------------------------------------
+
+
+def _holidays(tmp_path: Path, name: str, extra: str) -> Path:
+    p = tmp_path / name
+    p.write_text((ROOT / "configs" / "holidays.csv").read_text() + extra)
+    return p
+
+
+def test_promotion_uses_the_versions_packaged_references(
+    registry: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The working tree's holidays file has changed since v1 was registered;
+    promoting v1 must record and package v1's own file, not today's."""
+    v1_holidays = _holidays(tmp_path, "h1.csv", "")
+    v1 = registry["add"](holidays=v1_holidays)
+    monkeypatch.setattr(reg, "HOLIDAYS_CSV", _holidays(tmp_path, "now.csv", "x\n"))
+    state = _promote(registry, v1)
+    assert state.holidays_md5 == reg.file_md5(v1_holidays)
+    assert registry["holidays"].read_bytes() == v1_holidays.read_bytes()
+    assert state.reference_md5 == reg.file_md5(FIXTURE_CENTROIDS)
+    assert state.action == "promote"
+
+
+def test_rollback_restores_the_previous_versions_references(
+    registry: dict[str, Any], tmp_path: Path
+) -> None:
+    h1 = _holidays(tmp_path, "h1.csv", "")
+    h2 = _holidays(tmp_path, "h2.csv", "2031-01-01,New Year 2031\n")
+    v1 = registry["add"](holidays=h1, mae_test_model=4.7)
+    v2 = registry["add"](holidays=h2, mae_test_model=4.5)
+    _promote(registry, v1)
+    fixture_v1 = registry["fixture"].read_text()
+    _promote(registry, v2)
+    assert registry["holidays"].read_bytes() == h2.read_bytes()
+    state = _rollback(registry)
+    assert (state.version, state.action) == (v1, "rollback")
+    assert state.holidays_md5 == reg.file_md5(h1)
+    assert registry["holidays"].read_bytes() == h1.read_bytes()
+    assert registry["fixture"].read_text() == fixture_v1  # same refs, same numbers
+
+
+def test_packaged_reference_that_does_not_match_its_tag_is_refused(
+    registry: dict[str, Any], tmp_path: Path
+) -> None:
+    v1 = registry["add"](holidays=_holidays(tmp_path, "h1.csv", ""))
+    registry["client"].set_model_version_tag(MODEL, str(v1), "holidays_md5", "0" * 32)
+    with pytest.raises(RegistryError, match="holidays.csv md5"):
+        _promote(registry, v1)
+
+
+def test_legacy_version_falls_back_to_the_working_tree_and_says_so(
+    registry: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    v1 = registry["add"]()  # no packaged references: v1-v3 in production
+    with caplog.at_level("WARNING"):
+        state = _promote(registry, v1)
+    assert state.holidays_md5 == reg.file_md5(reg.HOLIDAYS_CSV)
+    assert "predates packaged references" in caplog.text

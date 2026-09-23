@@ -23,6 +23,16 @@ uv run python scripts/deploy_check.py --url http://localhost:8082 --expect-versi
 4. First image + function: run `deploy.yml` by `workflow_dispatch` up to the push step, then `deploy/aws/lambda.sh <image uri@digest> v<n>` (creates version 1 and alias `live`, and puts the Function URL on the alias); set `FUNCTION_URL`; re-run `deploy.yml`.
 5. Verify: `uv run python scripts/deploy_check.py --url $FUNCTION_URL --expect-version v<n> --malformed --cold`.
 
+## One-time migration to alias + ledger (ADR-0008 amendment, ADR-0012)
+
+```
+export BUDGET_EMAIL=... AWS_REGION=us-east-1
+deploy/aws/iam.sh && deploy/aws/ecr.sh
+deploy/aws/lambda.sh <live image uri@digest> v3     # version 1 + alias live + URL on the alias
+gh secret set FUNCTION_URL                          # the URL lambda.sh printed
+gh workflow run deploy.yml                          # seeds the ledger with the v3 release
+```
+
 ## Rollback
 
 **Automatic.** If `deploy.yml` moved alias `live` and live verification then
@@ -39,7 +49,11 @@ uv run python scripts/deploy_check.py --invoke nyc-taxi-trip-duration:live --exp
 ```
 Then make git agree (below), or the next deploy re-ships the bad champion.
 
-**Of the champion pointer** (the durable one):
+**Of the champion pointer** (the durable one). `make rollback` writes
+`action: rollback`; `deploy.yml` then **restores the recorded, verified
+release** of that model (same image digest, `release_id` and predictions;
+ADR-0012) instead of rebuilding it. To restore a specific release:
+`gh workflow run deploy.yml -f release_id=<id>` (ids: `aws s3 ls s3://<bucket>/releases/`).
 
 ```
 make rollback REASON="deploy_check failed on v<n>: <what>"
