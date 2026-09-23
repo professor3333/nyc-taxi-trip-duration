@@ -16,7 +16,7 @@ by humans occasionally. The API is a 900 MB container that needs ~1 GB RAM
 | idle cost | $0 | ≈ $9/month compute + ALB if any |
 | per-request | ~$0.20/M requests + GB-s (free tier covers this traffic) | included |
 | cold start | seconds (image pull + Python + model load); measured by `deploy_check.py --cold` | none |
-| operational surface | one function, one URL, reserved concurrency ≤ 5 caps runaway cost | cluster, task def, service, networking |
+| operational surface | one function, one URL (reserved concurrency limits rate, not dollars, and is not set on this account: docs/cost.md) | cluster, task def, service, networking |
 | same image? | yes (Lambda Web Adapter) | yes |
 
 ## Decision

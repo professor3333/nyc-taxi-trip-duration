@@ -244,3 +244,11 @@ Tick a line only when its proof command passes, not when the code is written.
   - `InitFailures` went to ALARM on that deploy's cold start, the only alarm firing. CloudWatch records "Successfully executed action" to SNS for it, but nothing was delivered: the subscription is pending. `alarm_drill.py` refuses for exactly that reason (exit 1).
 - **Freshness** (`scripts/freshness.py`, daily): red today on data (17 months) and model (22 months); retrain green (0.4 days).
 - **Alert delivery:** the only SNS subscription is still `PendingConfirmation`, so no alarm has ever reached anyone. `alarm_drill.py` (real ERROR line → alarm → email → OK → email) refuses to run until the owner confirms the email.
+
+## Cost accounting made honest — 2026-09-23
+
+- **`make cost`** now exists (`scripts/cost_report.py`). It prints the plan (FREE, 140 USD credits, expires 2027-03-22), the cost-allocation tag's status, and Cost Explorer by service, with usage, credits and net kept apart. It reports "no data" as no data, never as $0.
+- **Evidence, 2026-09-23:** Cost Explorer has no data yet (`DataUnavailableException`; account one day old). The `project` tag is not yet visible to billing, so it can't be activated. Issue #67 tracks the first actual line, the tag activation, and the full-month reconciliation for September on 2026-10-05.
+- **Ledger re-measured:** DVC remote 2.74 GB (the old figure was 793 MB); ECR 7 images ≈ 1.23 GB; logs 0.32 MB. Estimate ≈ $5.24 at list price, ≈ $1.20 after always-free allowances, $0 charged on the Free plan. Monitoring probe traffic (~7k invokes/month) and retention (DVC growth, ECR 5 images, 90-day artifacts) are now included.
+- **Corrected claims:** the budget only notifies, and reserved concurrency is **not set** (account limit 10) and would only limit the rate anyway. What actually bounds spend is IAM auth on the URL and the Free plan's credits.
+- The review's teardown bug (hardcoded alarm list) was already fixed in #66, which deletes by prefix; `tests/test_teardown.py` covers it.

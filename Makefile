@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -55,6 +55,9 @@ register:     ## Register current DVC outputs as a new model version (refuses di
 
 promote:      ## Promote a version: make promote VERSION=2 REASON="beats v1 on 2024-12"
 	uv run python scripts/promote.py --version $(VERSION) --reason "$(REASON)"
+
+cost:         ## Plan, credits and month-to-date cost by service (usage / credits / net): make cost [MONTH=YYYY-MM]
+	uv run python scripts/cost_report.py $(if $(MONTH),--month $(MONTH),)
 
 registry-backup: ## Dump the local registry (Postgres + artifacts + manifest) to backups/ and S3
 	uv run python scripts/registry_backup.py --upload s3://$${S3_BUCKET:-nyc-taxi-trip-duration-560512681455}/backups/registry
