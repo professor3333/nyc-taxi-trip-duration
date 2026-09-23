@@ -1,0 +1,94 @@
+name: reproduce
+
+# The full-data pipeline in the canonical training environment
+# (scripts/train_env.sh: Dockerfile `train` target, linux/amd64, the serving
+# image's pinned base). Runs here rather than on a laptop because the window
+# needs more memory than a small Docker VM has, and a runner is natively the
+# serving architecture (no emulation).
+#
+#   regenerate - on the dispatched branch: re-run every stage, push the new
+#                outputs to the DVC remote, commit dvc.lock and the git-tracked
+#                results to the same branch. Never on main (branch protection).
+#   verify     - exit criterion 1 for commit `rev` (default: the dispatched
+#                ref): make reproduce, i.e. a fresh clone re-runs every stage
+#                with no network and must match that commit's results bit for
+#                bit.
+#
+#   gh workflow run reproduce.yml --ref <branch> -f mode=regenerate
+#   gh workflow run reproduce.yml --ref <branch> -f mode=verify [-f rev=<sha>]
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: regenerate or verify
+        required: true
+        type: choice
+        options: [verify, regenerate]
+      rev:
+        description: "commit to verify (default: head of the dispatched ref)"
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: reproduce-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write    # regenerate commits the results to the branch
+      id-token: write    # AWS role: DVC remote read (verify) and write (regenerate)
+    env:
+      MLFLOW_TRACKING_URI: sqlite:///ci-mlflow.db   # throwaway, inside the checkout
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    steps:
+      - name: Refuse regenerate on main
+        if: inputs.mode == 'regenerate' && github.ref == 'refs/heads/main'
+        run: |
+          echo "::error::regenerate commits results; dispatch it on a branch and merge via PR"
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: make setup
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Regenerate every stage in the canonical training environment
+        if: inputs.mode == 'regenerate'
+        run: |
+          uv run dvc pull -q
+          TRAIN_ENV_NETWORK=none scripts/train_env.sh uv run --locked dvc repro --force
+          uv run dvc push -q
+          uv run dvc status
+          jq -r '.environment | "trained on \(.platform) in \(.container)"' models/model_meta.json
+          git config user.name "Niroj33"
+          git config user.email "86530493+professor3333@users.noreply.github.com"
+          git add dvc.lock metrics reports models/model_meta.json
+          git commit -m "Regenerate pipeline outputs in the canonical training environment"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          {
+            echo "### Regenerated"
+            echo "- commit: \`$(git rev-parse HEAD)\`"
+            echo "- $(jq -r '.environment.container' models/model_meta.json)"
+            echo; echo "Next: dispatch \`mode=verify\` on this commit."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify (make reproduce)
+        if: inputs.mode == 'verify'
+        env:
+          REV_INPUT: ${{ inputs.rev }}   # via env, never interpolated into the script
+        run: |
+          make reproduce REV="${REV_INPUT:-$GITHUB_SHA}" 2>&1 | tee reproduce.txt
+          { echo '### make reproduce'; echo '```'; tail -25 reproduce.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -77,10 +77,14 @@ These go into `model_meta.json` and the MLflow run to trace a model back to
 its origin (G8). None of them changes `model.pkl`:
 
 - `git_sha`: the commit that ran the stage.
-- `dvc.lock`: `data_versions` and `dvc_lock_md5` come from the lock as it
-  was when train started. A stage cannot depend on the file DVC writes
-  about it.
-- `TRAINING_IMAGE`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and the
+- `dvc.lock` is **no longer read** by train (since 2026-09-23). It used to
+  copy the lock into `data_versions` / `dvc_lock_md5` while its own and
+  evaluate's entries were still the previous run's. train now records
+  `inputs_md5`, the md5 of each file it opened, hashed by itself. The
+  completed-run record is `dvc.lock` at the commit, stored by `register.py`
+  as `dvc_lock_md5`.
+- `TRAINING_IMAGE` (the canonical image id, set by `scripts/train_env.sh`),
+  `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and the
   platform string: recorded, not used.
 - `MLFLOW_TRACKING_URI`: where the run is logged, not what is computed.
 

@@ -152,17 +152,22 @@ def write_artifacts(
     (out_dir / META_FILE).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
 
 
-def data_versions(lock_path: Path = Path("dvc.lock")) -> dict[str, str]:
-    """md5 of every pipeline input and output, i.e. the exact data a run saw."""
-    import yaml
+def input_md5s(paths: Sequence[Path]) -> dict[str, str]:
+    """md5 of each file this stage read, hashed by the stage itself.
 
-    lock = yaml.safe_load(lock_path.read_text()) if lock_path.exists() else {}
+    This is INPUT provenance: what went into this fit. It is not a manifest
+    of the completed run - dvc.lock is only final after every stage has
+    finished, so the completed-run record is dvc.lock at the committed
+    revision, which register.py stores as `dvc_lock_md5` (and refuses to
+    register while `dvc status` is not clean). md5 matches DVC's file hash.
+    """
     out: dict[str, str] = {}
-    for name, stage in (lock.get("stages") or {}).items():
-        for kind in ("deps", "outs"):
-            for item in stage.get(kind, []) or []:
-                if "md5" in item:
-                    out[f"{name}.{kind}:{item['path']}"] = item["md5"]
+    for p in paths:
+        digest = hashlib.md5()
+        with p.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        out[p.as_posix()] = digest.hexdigest()
     return out
 
 
@@ -173,6 +178,7 @@ def run(
     out_dir: Path,
     prepare_report: Path,
     tracking_uri: str | None,
+    reference_files: Sequence[Path] = (),
 ) -> dict[str, Any]:
     import sklearn
 
@@ -202,11 +208,13 @@ def run(
     meta = {
         "feature_columns": list(FEATURE_COLUMNS),
         "environment": environment(),
-        "data_versions": data_versions(),
-        "dvc_lock_md5": (
-            hashlib.md5(Path("dvc.lock").read_bytes()).hexdigest()
-            if Path("dvc.lock").exists()
-            else ""
+        "inputs_md5": input_md5s(
+            [
+                processed_dir / "train.parquet",
+                processed_dir / "val.parquet",
+                prepare_report,
+                *reference_files,
+            ]
         ),
         "categorical_features": list(CATEGORICAL_FEATURES),
         "target": TARGET,
@@ -255,7 +263,9 @@ def run(
                 {
                     "git_sha": meta["git_sha"],
                     "stage": "train",
-                    "dvc_lock_md5": meta["dvc_lock_md5"],
+                    "train_parquet_md5": meta["inputs_md5"][
+                        (processed_dir / "train.parquet").as_posix()
+                    ],
                     "uv_lock_md5": meta["environment"]["uv_lock_md5"],
                     "platform": meta["environment"]["platform"],
                     "container": meta["environment"]["container"],
@@ -303,9 +313,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     os.environ["OMP_NUM_THREADS"] = str(params.n_threads)
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
-    ref = ReferenceData.load(
-        params.data.reference_dir / "zone_centroids.csv", args.holidays
-    )
+    centroids = params.data.reference_dir / "zone_centroids.csv"
+    ref = ReferenceData.load(centroids, args.holidays)
     run(
         params,
         ref,
@@ -313,6 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.out_dir,
         args.prepare_report,
         os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001"),
+        reference_files=(centroids, args.holidays),
     )
     return 0
 

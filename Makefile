@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill
+.PHONY: setup lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-down mlflow-ui register promote rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -29,13 +29,16 @@ verify-raw:   ## Recompute md5 of every raw file and compare with its ingest rep
 quality:      ## Data-quality report + acceptance rules (exits 1 if a month is unfit)
 	uv run python -m tripduration.quality
 
-pipeline:     ## Run every DVC stage whose inputs changed (validate -> prepare -> train -> evaluate)
-	uv run dvc repro
+pipeline:     ## Run every stale DVC stage in the canonical training env (linux/amd64, serving base image)
+	scripts/train_env.sh uv run --locked dvc repro
+
+train-env:    ## Build the canonical training image (Dockerfile target `train`) and print its id
+	scripts/train_env.sh python -c "import platform, sys; print(platform.platform(), sys.version.split()[0])"
 
 pipeline-smoke: ## Whole pipeline on tests/fixtures in a temp dir with SQLite MLflow (what CI runs)
 	uv run pytest tests/test_pipeline.py -q
 
-reproduce:    ## Exit criterion 1: fresh clone -> dvc pull -> dvc repro -> metrics identical
+reproduce:    ## Exit criterion 1: clone REV (default HEAD) -> dvc pull -> repro in train env -> bit-identical predictions
 	scripts/reproduce.sh
 
 compose-up:   ## Start MLflow tracking server + Postgres (http://localhost:5001)

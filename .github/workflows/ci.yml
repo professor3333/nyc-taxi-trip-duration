@@ -44,6 +44,13 @@ jobs:
       - name: Train on the fixture months (no full data, no network)
         run: uv run pytest -q tests/test_pipeline.py
 
+      # The canonical training environment (Dockerfile `train` target) must
+      # build and run the pipeline, or the scheduled retrain breaks unseen.
+      - name: Fixture pipeline in the canonical training environment
+        run: |
+          TRAIN_ENV_NETWORK=none scripts/train_env.sh \
+            uv run --locked pytest -q -p no:cacheprovider tests/test_pipeline.py
+
       # The image needs model artefacts. CI has no DVC remote, so it trains a
       # tiny model from the fixture months into build/ci-models and bakes that.
       # This proves the Dockerfile and the serving path, not the model quality.

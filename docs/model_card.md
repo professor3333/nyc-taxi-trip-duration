@@ -53,13 +53,14 @@ MAPE is 31–35 % and dominated by short trips; MAE is the primary metric
 
 ## A caveat on the reported numbers
 
-The metrics above were computed on the machine that trained the model
-(arm64). Serving runs on x86_64 Lambda, where the same model's predictions
-differ by a mean of 0.043 min and at most 0.597 min — up to 2% — because a
-feature value differing in its last bits can fall the other side of a tree
-split. The measurement and its consequences are in
-`docs/reproducibility.md`. Models promoted from a scheduled retrain PR are
-trained on `ubuntu-latest` (x86_64) and therefore measured where they serve.
+Champion v3 was trained and measured on arm64, and it serves on x86_64
+Lambda. One feature, `centroid_dist_km` (`np.hypot`), differs in its last bit
+between the two libms. On the 80-row fixture grid that moves 10 predictions,
+by at most 0.597 min; the model evaluates identically on identical features.
+Models trained from now on are trained and evaluated in the canonical
+environment, which shares the serving image's pinned base
+(`docs/reproducibility.md`), so their reported numbers are computed with the
+features they serve with.
 
 ## Champion selection and rollback
 
