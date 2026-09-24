@@ -155,3 +155,27 @@ never a silent change. The sampling seed comes from `params.yaml`.
 - A month that TLC republishes with corrections changes exactly one raw file;
   the split rule is unaffected, but the retrain that picks it up will show a
   `dvc.lock` change for that month and its downstream outputs.
+
+## Amendment (2026-09-24): the runner budget, measured at the full window
+
+The Consequences above said peak RAM and runtime at six months "will be
+measured, not inferred". The rolling backtest measured them (`docs/backtest.md`,
+backtest.yml run 35950037175): 23 folds, each trained at exactly six months
+(19.7–23.9M rows) in the canonical training image on `ubuntu-latest`
+(4 vCPU / 15.6 GB), the runner type `retrain.yml` uses.
+
+| measure | median | max |
+|---|---|---|
+| training rows | 22.5M | 23.9M (fold 2025-12) |
+| model fit (4 threads) | 6.4 min | 7.2 min |
+| whole fold (load + features + fit + validate + test) | 8.1 min | 9.1 min |
+| process peak RSS | 7.0 GB | 7.4 GB |
+
+**Decision.** `train_sample_frac` stays at 1.0. The largest window uses 47%
+of the runner's memory. Months have grown since app-dispatched trips joined
+the feed (2.86M valid rows in 2024-08, 4.38M in 2025-05). A window of six
+4.38M-row months (~26.3M rows), extrapolated linearly from 7.4 GB at 23.9M,
+peaks at about 8.1 GB, which still fits. The laptop's 3.9 GiB Docker VM cannot run the full window, and
+that is why `reproduce.yml` exists. If a retrain's peak exceeds 12 GB, the
+response is the sampling amendment this ADR already provides for, not a
+bigger runner by default.
