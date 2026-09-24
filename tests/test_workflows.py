@@ -88,7 +88,6 @@ def test_deploy_scans_before_lambda_changes_and_restores_on_failure() -> None:
     update = names.index("Update Lambda (by digest) and wait")
     assert scan < update  # a vulnerable image never reaches Lambda
     restore = job["steps"][names.index("Restore the previous image")]
-    assert names.index("Restore the previous image") == len(names) - 1
     assert restore["if"] == (
         "failure() && env.UPDATING == 'true' && env.PREV_IMAGE != '' "
         "&& env.PREV_IMAGE != env.IMAGE_URI"
@@ -102,3 +101,64 @@ def test_deploy_scans_before_lambda_changes_and_restores_on_failure() -> None:
     )
     assert '--image-uri "$PREV_IMAGE"' in restore["run"]
     assert 'test "$RUNNING" = "$PREV_IMAGE"' in restore["run"]
+
+
+def test_deploy_smoke_tests_the_release_image_before_any_lambda_change() -> None:
+    """Audit: the real champion was first exercised after production changed."""
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    smoke = names.index("Smoke test the release image (before any Lambda change)")
+    first_change = min(
+        i
+        for i, st in enumerate(job["steps"])
+        if any(
+            cmd in st.get("run", "")
+            for cmd in ("update-function-code", "publish-version", "update-alias")
+        )
+    )
+    assert smoke < first_change
+    run = job["steps"][smoke]["run"]
+    assert 'docker run -d --name release-smoke -p 8080:8080 "$IMAGE_URI"' in run
+    for flag in ("--expect-version", "--expect-fixture", "--malformed"):
+        assert flag in run
+    assert "--allow-degraded" not in run  # the real model must load
+
+
+def test_alias_mode_verifies_the_candidate_before_it_takes_traffic() -> None:
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    steps = job["steps"]
+    publish = names.index("Publish a candidate version (no traffic)")
+    check = names.index(
+        "Deploy check (cold start first, then version, fixtures, malformed -> 422)"
+    )
+    move = names.index("Move the live alias to the verified version")
+    url = names.index("Deploy check over the Function URL (HTTP)")
+    assert publish < check < move < url
+    assert steps[publish]["if"] == "env.RELEASE_MODE == 'alias'"
+    assert steps[names.index("Update Lambda (by digest) and wait")]["if"] == (
+        "env.RELEASE_MODE == 'latest'"
+    )
+    # the pre-traffic check targets the candidate version, not the alias
+    assert "TARGET=$FN:$CANDIDATE" in steps[publish]["run"]
+    assert '--invoke "$TARGET"' in steps[check]["run"]
+    assert "update-alias" not in steps[check]["run"]
+    # ALIAS_MOVED is recorded before the move, so a half-done move is undone
+    run = steps[move]["run"]
+    assert run.index("ALIAS_MOVED=true") < run.index("update-alias")
+    back = steps[names.index("Move the live alias back")]
+    assert back["if"] == (
+        "failure() && env.RELEASE_MODE == 'alias' && env.PREV_VERSION != ''"
+    )
+    assert '--function-version "$PREV_VERSION"' in back["run"]
+    assert names[-2:] == ["Restore the previous image", "Move the live alias back"]
+
+
+def test_monitor_probes_what_callers_are_served() -> None:
+    job = _wf("monitor.yml")["jobs"]["monitor"]
+    assert job["env"]["TARGET"].endswith(
+        "${{ vars.RELEASE_MODE == 'alias' && ':live' || '' }}"
+    )
+    runs = "\n".join(st.get("run", "") for st in job["steps"])
+    assert '--invoke "$TARGET"' in runs
+    assert '--qualifier "$URL_QUALIFIER"' in runs

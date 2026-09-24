@@ -25,6 +25,11 @@ defaults:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    env:
+      # In alias mode (deploy.yml) callers are served by the `live` alias;
+      # the unqualified function ($LATEST) may hold a rejected candidate.
+      TARGET: ${{ secrets.LAMBDA_FUNCTION_NAME }}${{ vars.RELEASE_MODE == 'alias' && ':live' || '' }}
+      URL_QUALIFIER: ${{ vars.RELEASE_MODE == 'alias' && 'live' || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -39,7 +44,7 @@ jobs:
         id: check
         continue-on-error: true
         run: |
-          uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+          uv run python scripts/deploy_check.py --invoke "$TARGET" \
             --expect-version "v$(jq -r .version models/champion.json)" \
             --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt \
             || echo "failed=true" >> "$GITHUB_OUTPUT"
@@ -52,7 +57,7 @@ jobs:
         continue-on-error: true
         run: |
           URL=$(aws lambda get-function-url-config --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
-            --query FunctionUrl --output text)
+            ${URL_QUALIFIER:+--qualifier "$URL_QUALIFIER"} --query FunctionUrl --output text)
           # End to end from outside AWS: 10 warm /predict calls over the real
           # network path, p95 enforced and published as E2ELatencyMs.
           uv run python scripts/deploy_check.py --url "$URL" --sigv4 \

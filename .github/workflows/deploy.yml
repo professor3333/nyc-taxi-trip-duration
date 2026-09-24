@@ -2,12 +2,24 @@ name: deploy
 
 # Deploys when the champion pointer changes on main (promotion or rollback),
 # or by hand. Fetches the champion's artefacts from the DVC remote (S3) at the
-# champion's commit, builds the image, pushes to ECR, updates Lambda, and runs
-# deploy_check against the Function URL. The release image must pass a
-# vulnerability scan before Lambda is touched. If any check after the update
-# fails, the previous image is restored automatically, verified, and the run
-# still fails; a model rollback is `make rollback REASON=...` + push
-# (docs/runbook.md).
+# champion's commit, builds the image and pushes it to ECR. Before Lambda is
+# touched, the exact pushed image must pass a vulnerability scan AND a smoke
+# test on the runner with the real champion baked in (model loads, /ready,
+# the champion's fixture predictions, malformed -> 422).
+#
+# RELEASE_MODE (repository variable, ADR-0008 amendment "verified release"):
+#   alias  - the verified path. The image becomes a new *published version*
+#            that receives no traffic; it is checked through the Lambda API
+#            (cold start, version, fixtures, malformed); only then is the
+#            `live` alias (which the Function URL serves) moved to it. A
+#            failure before the move leaves production untouched; after it,
+#            the alias goes back to the previous version.
+#   latest - (default, until the one-time migration in docs/runbook.md) the
+#            unqualified function is updated in place and checked afterwards;
+#            a failure restores the previous image. Requests can reach the
+#            new image before its checks finish; the smoke test above is what
+#            this mode relies on.
+# A model rollback is `make rollback REASON=...` + push (docs/runbook.md).
 
 on:
   push:
@@ -42,6 +54,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
+    env:
+      FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
+      RELEASE_MODE: ${{ vars.RELEASE_MODE || 'latest' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -116,11 +131,57 @@ jobs:
             aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             image --quiet --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$IMAGE_URI"
 
+      # The release itself, before any Lambda change: the pushed digest, with
+      # the real champion baked in, on the runner (x86_64 like Lambda). CI's
+      # container smoke uses a fixture model; this proves *this* model loads
+      # (deploy_check fails on a degraded /health), /ready passes, the
+      # champion's fixture predictions come back, and bad input is a 422.
+      - name: Smoke test the release image (before any Lambda change)
+        run: |
+          docker run -d --name release-smoke -p 8080:8080 "$IMAGE_URI"
+          for _ in $(seq 1 90); do
+            docker logs release-smoke 2>&1 | grep -q "Application startup complete" && break
+            sleep 1
+          done
+          if ! uv run python scripts/deploy_check.py --url http://localhost:8080 \
+              --expect-version ${{ steps.champ.outputs.version }} \
+              --expect-fixture models/champion_fixture.csv \
+              --models-dir build/champion/models --reference-dir build/champion/reference \
+              --malformed; then
+            docker logs release-smoke 2>&1 | tail -40
+            exit 1
+          fi
+          docker rm -f release-smoke >/dev/null
+
+      - name: Release mode
+        env:
+          DEPLOY_ROLE_SET: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
+        run: |
+          case "$RELEASE_MODE" in
+            alias)
+              # Versions and the alias need the ADR-0013 deploy role; the
+              # legacy role has no PublishVersion/UpdateAlias.
+              [ "$DEPLOY_ROLE_SET" = "true" ] \
+                || { echo "::error::RELEASE_MODE=alias needs AWS_DEPLOY_ROLE_ARN (iam.sh migration, docs/runbook.md)"; exit 1; }
+              # The alias the Function URL serves must exist: the migration
+              # (deploy/aws/lambda.sh with LAMBDA_RELEASE_MODE=alias) creates it.
+              PREV_VERSION=$(aws lambda get-alias --function-name "$FN" --name live \
+                --query FunctionVersion --output text) \
+                || { echo "::error::RELEASE_MODE=alias but alias 'live' is unreadable; run the migration (docs/runbook.md)"; exit 1; }
+              echo "PREV_VERSION=$PREV_VERSION" >> "$GITHUB_ENV"
+              echo "live alias -> version $PREV_VERSION" ;;
+            latest)
+              echo "::warning::RELEASE_MODE=latest: production is updated before it is verified. Migrate to alias mode (docs/runbook.md)." ;;
+            *)
+              echo "::error::unknown RELEASE_MODE '$RELEASE_MODE' (alias|latest)"; exit 1 ;;
+          esac
+
       - name: Update Lambda (by digest) and wait
+        if: env.RELEASE_MODE == 'latest'
         run: |
           # By digest, not by tag: what was tested is exactly what runs, and
           # it cannot be repointed afterwards.
-          PREV=$(aws lambda get-function --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+          PREV=$(aws lambda get-function --function-name "$FN" \
             --query Code.ImageUri --output text)
           # New code means no warm environment can exist: the next invoke is
           # the cold start, measured and proven by deploy_check --cold. The
@@ -131,18 +192,42 @@ jobs:
           # update: an update that fails half way must be restored too.
           echo "UPDATING=true" >> "$GITHUB_ENV"
           aws lambda update-function-code \
-            --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+            --function-name "$FN" \
             --image-uri "$IMAGE_URI" >/dev/null
-          aws lambda wait function-updated --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}"
-          RUNNING=$(aws lambda get-function --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+          aws lambda wait function-updated --function-name "$FN"
+          RUNNING=$(aws lambda get-function --function-name "$FN" \
             --query Code.ImageUri --output text)
           echo "running: $RUNNING"
           test "$RUNNING" = "$IMAGE_URI" || { echo "Lambda is not running the image we pushed"; exit 1; }
+          echo "TARGET=$FN" >> "$GITHUB_ENV"
+
+      # $LATEST gets the new code, then a numbered version is published from
+      # it. Nothing routes to either: callers reach the function only through
+      # the `live` alias (its Function URL), and monitor.yml probes `live`.
+      - name: Publish a candidate version (no traffic)
+        if: env.RELEASE_MODE == 'alias'
+        run: |
+          aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
+          aws lambda wait function-updated-v2 --function-name "$FN"
+          CANDIDATE=$(aws lambda publish-version --function-name "$FN" \
+            --description "$RELEASE" --query Version --output text)
+          aws lambda wait function-active-v2 --function-name "$FN:$CANDIDATE"
+          RESOLVED=$(aws lambda get-function --function-name "$FN" --qualifier "$CANDIDATE" \
+            --query Code.ResolvedImageUri --output text)
+          echo "candidate version $CANDIDATE runs $RESOLVED"
+          test "$RESOLVED" = "$IMAGE_URI" || { echo "::error::version $CANDIDATE is not the image we pushed"; exit 1; }
+          # A new version has never run, so its first invoke is a cold start.
+          # Publishing unchanged code returns the existing version: nothing new.
+          if [ "$CANDIDATE" != "$PREV_VERSION" ]; then echo "COLD=true" >> "$GITHUB_ENV"; fi
+          echo "CANDIDATE=$CANDIDATE" >> "$GITHUB_ENV"
+          echo "TARGET=$FN:$CANDIDATE" >> "$GITHUB_ENV"
 
       - name: Deploy check (cold start first, then version, fixtures, malformed -> 422)
         run: |
           # Through the Lambda API: proves the container and the service even
-          # if the URL edge were misconfigured. The next step checks the edge.
+          # if the URL edge were misconfigured. The URL step checks the edge.
+          # TARGET is the candidate version in alias mode (no traffic yet) and
+          # the updated function in latest mode.
           # --cold measures the first request and fails unless the app reports
           # a fresh process AND the platform REPORT line carries Init Duration.
           COLD_ARGS=()
@@ -151,7 +236,7 @@ jobs:
           else
             echo "::notice::image unchanged; no new execution environment, cold start not measured"
           fi
-          uv run python scripts/deploy_check.py --invoke "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+          uv run python scripts/deploy_check.py --invoke "$TARGET" \
             "${COLD_ARGS[@]}" \
             --expect-version ${{ steps.champ.outputs.version }} \
             --expect-fixture models/champion_fixture.csv \
@@ -167,12 +252,28 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+      - name: Move the live alias to the verified version
+        if: env.RELEASE_MODE == 'alias' && env.CANDIDATE != env.PREV_VERSION
+        run: |
+          # From here a failure moves the alias back (last step).
+          echo "ALIAS_MOVED=true" >> "$GITHUB_ENV"
+          aws lambda update-alias --function-name "$FN" --name live \
+            --function-version "$CANDIDATE" >/dev/null
+          NOW=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text)
+          test "$NOW" = "$CANDIDATE" || { echo "::error::live alias is on $NOW, not $CANDIDATE"; exit 1; }
+          {
+            echo "### Released"
+            echo "- \`live\`: version $PREV_VERSION -> $CANDIDATE (\`$RELEASE\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # The endpoint callers use: HTTP to the Function URL, SigV4-signed as
       # this non-root role (identity policy grants InvokeFunctionUrl AND
       # InvokeFunction - both are required, ADR-0008 amendment 2026-09-23).
       - name: Deploy check over the Function URL (HTTP)
         run: |
-          URL=$(aws lambda get-function-url-config --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
+          QUALIFIER=()
+          if [ "$RELEASE_MODE" = "alias" ]; then QUALIFIER=(--qualifier live); fi
+          URL=$(aws lambda get-function-url-config --function-name "$FN" "${QUALIFIER[@]}" \
             --query FunctionUrl --output text)
           uv run python scripts/deploy_check.py --url "$URL" --sigv4 \
             --expect-version ${{ steps.champ.outputs.version }} \
@@ -183,7 +284,7 @@ jobs:
       - name: Drill - injected failure
         if: inputs.inject_failure
         run: |
-          echo "::error::injected failure (workflow_dispatch inject_failure=true): the restore step must now put $PREV_IMAGE back"
+          echo "::error::injected failure (workflow_dispatch inject_failure=true): the restore step must now put the previous release back"
           exit 1
 
       # Automatic recovery: the image that was serving before this run goes
@@ -192,7 +293,6 @@ jobs:
       - name: Restore the previous image
         if: failure() && env.UPDATING == 'true' && env.PREV_IMAGE != '' && env.PREV_IMAGE != env.IMAGE_URI
         run: |
-          FN="${{ secrets.LAMBDA_FUNCTION_NAME }}"
           echo "::warning::deploy failed after the update; restoring $PREV_IMAGE"
           aws lambda wait function-updated --function-name "$FN"
           aws lambda update-function-code --function-name "$FN" --image-uri "$PREV_IMAGE" >/dev/null
@@ -205,4 +305,27 @@ jobs:
             echo "### Deploy failed; previous image restored"
             echo "- failed: \`$IMAGE_URI\`"
             echo "- restored and verified: \`$PREV_IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Alias mode: production changed only if the alias moved. Before that,
+      # the failed candidate never served a request and there is nothing to
+      # undo; the version stays published (unreferenced) for inspection.
+      - name: Move the live alias back
+        if: failure() && env.RELEASE_MODE == 'alias' && env.PREV_VERSION != ''
+        run: |
+          if [ "${ALIAS_MOVED:-}" != "true" ]; then
+            echo "::notice::the candidate failed before the alias moved; live stayed on version $PREV_VERSION"
+            echo "### Candidate rejected before release; \`live\` untouched (version $PREV_VERSION)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::warning::deploy failed after the alias moved; live -> version $PREV_VERSION"
+          aws lambda update-alias --function-name "$FN" --name live \
+            --function-version "$PREV_VERSION" >/dev/null
+          NOW=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text)
+          test "$NOW" = "$PREV_VERSION" || { echo "::error::alias restore failed: live on $NOW"; exit 1; }
+          uv run python scripts/deploy_check.py --invoke "$FN:live" --malformed
+          {
+            echo "### Deploy failed; \`live\` moved back"
+            echo "- failed: version $CANDIDATE (\`$IMAGE_URI\`)"
+            echo "- restored and verified: version $PREV_VERSION"
           } >> "$GITHUB_STEP_SUMMARY"

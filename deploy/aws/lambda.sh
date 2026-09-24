@@ -9,11 +9,18 @@
 # statements are compared with what is deployed; each difference is logged
 # ("memory 1024 -> 3008") and corrected, and a run with no drift changes
 # nothing. Needs jq.
+#
+# LAMBDA_RELEASE_MODE=alias (env.sh) is the one-time migration to verified
+# releases: publishes a version of IMAGE_URI, creates alias `live` on it (once;
+# afterwards deploy.yml owns the alias), serves the Function URL and its grants
+# from `live`, and deletes the unqualified URL, which would otherwise expose
+# $LATEST - where deploy.yml puts candidates before they are verified.
 source "$(dirname "$0")/env.sh"
 IMAGE_URI="${1:?image uri required}"
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
 FN=(--function-name "$LAMBDA_FUNCTION_NAME")
 WANT_ENV=$(jq -cS . <<<"$LAMBDA_ENV_JSON")
+DRIFT=()   # configuration differences found on an existing function
 
 if ! aws lambda get-function "${FN[@]}" >/dev/null 2>&1; then
   aws lambda create-function "${FN[@]}" --package-type Image --code ImageUri="$IMAGE_URI" \
@@ -61,13 +68,30 @@ if ! aws lambda put-function-concurrency "${FN[@]}" \
   log "could not reserve $LAMBDA_RESERVED_CONCURRENCY; account concurrency limit is $LIMIT (a rate bound, not a cost cap)"
 fi
 
+# --- Release alias (LAMBDA_RELEASE_MODE=alias) -------------------------------------
+URL_Q=()   # qualifier of the Function URL and its grants
+if [ "$LAMBDA_RELEASE_MODE" = "alias" ]; then
+  if LIVE=$(aws lambda get-alias "${FN[@]}" --name live --query FunctionVersion --output text 2>/dev/null); then
+    log "alias live -> version $LIVE (moved only by deploy.yml after verification; not changed here)"
+    [ ${#DRIFT[@]} -eq 0 ] || log "configuration changes reach live with the next published version (deploy.yml)"
+  else
+    V=$(aws lambda publish-version "${FN[@]}" --description "migration: $IMAGE_URI" --query Version --output text)
+    aws lambda wait function-active-v2 --function-name "$LAMBDA_FUNCTION_NAME:$V"
+    aws lambda create-alias "${FN[@]}" --name live --function-version "$V" >/dev/null
+    log "created alias live -> version $V ($IMAGE_URI)"
+  fi
+  URL_Q=(--qualifier live)
+elif [ "$LAMBDA_RELEASE_MODE" != "latest" ]; then
+  echo "LAMBDA_RELEASE_MODE must be latest or alias, not '$LAMBDA_RELEASE_MODE'" >&2; exit 1
+fi
+
 # --- Function URL -------------------------------------------------------------
-HAVE_AUTH=$(aws lambda get-function-url-config "${FN[@]}" --query AuthType --output text 2>/dev/null || true)
+HAVE_AUTH=$(aws lambda get-function-url-config "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --query AuthType --output text 2>/dev/null || true)
 if [ -z "$HAVE_AUTH" ]; then
-  aws lambda create-function-url-config "${FN[@]}" --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
+  aws lambda create-function-url-config "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
   log "created Function URL (auth $LAMBDA_URL_AUTH_TYPE)"
 elif [ "$HAVE_AUTH" != "$LAMBDA_URL_AUTH_TYPE" ]; then
-  aws lambda update-function-url-config "${FN[@]}" --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
+  aws lambda update-function-url-config "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --auth-type "$LAMBDA_URL_AUTH_TYPE" >/dev/null
   log "Function URL auth $HAVE_AUTH -> $LAMBDA_URL_AUTH_TYPE"
 else
   log "Function URL auth already $LAMBDA_URL_AUTH_TYPE"
@@ -80,17 +104,17 @@ fi
 # here; the Actions role has both, so either one alone keeps it working.
 # The statements of the other auth mode are removed, so switching modes never
 # leaves a public grant behind.
-POLICY_SIDS=$(aws lambda get-policy "${FN[@]}" --query Policy --output text 2>/dev/null | jq -r '.Statement[].Sid' || true)
+POLICY_SIDS=$(aws lambda get-policy "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --query Policy --output text 2>/dev/null | jq -r '.Statement[].Sid' || true)
 has_sid() { grep -qx "$1" <<<"$POLICY_SIDS"; }
 grant() {  # sid action principal [extra add-permission args...]
   local sid=$1 action=$2 principal=$3; shift 3
   if has_sid "$sid"; then return; fi
-  aws lambda add-permission "${FN[@]}" --statement-id "$sid" --action "$action" --principal "$principal" "$@" >/dev/null
+  aws lambda add-permission "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --statement-id "$sid" --action "$action" --principal "$principal" "$@" >/dev/null
   log "granted $sid ($action to $principal)"
 }
 revoke() {
   if has_sid "$1"; then
-    aws lambda remove-permission "${FN[@]}" --statement-id "$1"
+    aws lambda remove-permission "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --statement-id "$1"
     log "revoked $1"
   fi
 }
@@ -104,7 +128,19 @@ else
   grant github-actions-url lambda:InvokeFunctionUrl "$GH_ROLE_ARN" --function-url-auth-type AWS_IAM
   grant github-actions-invoke lambda:InvokeFunction "$GH_ROLE_ARN" --invoked-via-function-url
 fi
-FUNCTION_URL=$(aws lambda get-function-url-config "${FN[@]}" --query FunctionUrl --output text)
+if [ "$LAMBDA_RELEASE_MODE" = "alias" ]; then
+  # The unqualified URL would serve $LATEST, i.e. unverified candidates.
+  if aws lambda get-function-url-config "${FN[@]}" >/dev/null 2>&1; then
+    aws lambda delete-function-url-config "${FN[@]}"
+    log "deleted the unqualified Function URL (it served \$LATEST)"
+  fi
+  for sid in public-url public-invoke github-actions-url github-actions-invoke; do
+    if aws lambda remove-permission "${FN[@]}" --statement-id "$sid" >/dev/null 2>&1; then
+      log "revoked unqualified $sid"
+    fi
+  done
+fi
+FUNCTION_URL=$(aws lambda get-function-url-config "${FN[@]}" ${URL_Q[@]+"${URL_Q[@]}"} --query FunctionUrl --output text)
 
 # Logs, metric filters, alarms and the alert topic (no grants, no function
 # changes, so it can also be run on its own).

@@ -160,6 +160,66 @@ init plus the retry. Consequences:
   first request instead of at startup; slim the image (fewer layers to
   fetch); SnapStart does not apply to container images.
 
+## Amendment, 2026-09-24 — verified release: nothing reaches callers unverified
+
+**Finding (external audit, confirmed from the workflow order).** `deploy.yml`
+built and pushed the image, scanned it, **updated the production function**,
+and only then checked readiness, predictions, fixtures and the URL. CI's
+container smoke test uses a fixture model, so the real champion was first
+exercised in production. The automatic restore limited the damage, but
+requests could reach a bad release before the checks finished. Draft PR #48
+proposed the fix. It went stale behind #50–#81, and this amendment
+supersedes it on current `main`.
+
+**Decision.**
+1. **Smoke-test the release image before any Lambda change** (both modes).
+   The pushed digest runs on the runner (x86_64, like Lambda) and must pass
+   `deploy_check` with `--expect-version`, `--expect-fixture` and
+   `--malformed`, without `--allow-degraded`. Verified on the real v1 release
+   image, built as `deploy.yml` builds it: all checks pass, 80 fixture rows,
+   0 mismatched. Negative controls: with the model directory emptied, 6 checks
+   fail (unavailable, `/ready` 503); expecting v3 from the v1 image, the
+   version check fails.
+2. **Publish a candidate version, verify it, then move an alias**
+   (`RELEASE_MODE=alias`). `$LATEST` takes the new code, `publish-version`
+   freezes it as version N, and N's resolved image must equal the pushed
+   digest. `deploy_check --invoke fn:N` runs the cold-start, version, fixture
+   and malformed checks with no traffic, because callers reach only `live`
+   (its Function URL) and `monitor.yml` probes `live`. After that,
+   `update-alias live → N`, then the URL check. A failure before the move
+   leaves production untouched. A failure after it moves `live` back to the
+   recorded previous version, which is then verified.
+3. **An explicit switch, not detection.** Whether the alias exists cannot
+   be read reliably before the IAM migration: the legacy role gets
+   AccessDenied, which looks the same as "not migrated". So the mode is a
+   repository variable, and alias mode refuses to run without the ADR-0013
+   deploy role. `latest` stays the default until the owner runs the
+   one-time migration (runbook, "Migrate to verified releases"). That
+   migration changes the Function URL, because the URL moves to the alias.
+
+**What the smoke test cannot prove.** Lambda-specific behaviour: the Web
+Adapter, the 10 s init limit, memory, and IAM at the URL edge. In alias mode
+the candidate-version check covers all of these before traffic. In `latest`
+mode they are still checked only after the update.
+
+**Unverified until the migration runs.** The `Url5xxCount` and
+`UrlRequestLatency` alarms use only the `FunctionName` dimension. Lambda is
+expected to publish that aggregate for alias URLs too. Confirm that the
+metrics appear after the migration, or add `Resource=fn:live`.
+
+**Consequences.**
+- Every alias-mode deploy leaves a published version behind (free). Each one
+  pins its image. The ECR rule keeps the 5 most recent pushes of *any* tag,
+  and images rejected by the scan or the smoke test count too, because both
+  run after the push. Five failed pushes in a row would therefore expire the
+  image `live` runs on, and a version whose image expired is no longer a
+  rollback target. The same was already true of `PREV_IMAGE` in `latest`
+  mode. Open follow-up: smoke-test before pushing (build `--load`, then
+  `docker push`). It needs one real push to confirm Lambda accepts the
+  resulting manifest, so it is not done here.
+- Configuration changes by `lambda.sh` (memory, environment) reach `live`
+  only with the next published version, that is the next deploy.
+
 ## Consequences
 
 - The 900 MB image is the main cold-start cost; slimming (no pyarrow at

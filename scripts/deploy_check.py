@@ -555,7 +555,8 @@ def main() -> int:
 
             try:
                 env = find_environment(
-                    f"/aws/lambda/{target_fn}",
+                    # A qualified target (fn:7, fn:live) logs to the function's group.
+                    f"/aws/lambda/{target_fn.split(':')[0]}",
                     first["request_id"] or "",
                     first.get("started_epoch_ms", int(time.time() * 1000)),
                 )

@@ -39,5 +39,10 @@ export LAMBDA_ENV_JSON="${LAMBDA_ENV_JSON:-$DEFAULT_LAMBDA_ENV_JSON}"
 export LAMBDA_RESERVED_CONCURRENCY="${LAMBDA_RESERVED_CONCURRENCY:-5}"
 # AWS_IAM: this account blocks public function URLs (ADR-0008 amendment 2026-09-22).
 export LAMBDA_URL_AUTH_TYPE="${LAMBDA_URL_AUTH_TYPE:-AWS_IAM}"
+# latest: the Function URL serves the unqualified function, updated in place.
+# alias:  the URL serves alias `live`; deploy.yml publishes a version, verifies
+#         it with no traffic, then moves the alias (ADR-0008 "verified release").
+#         Set together with the repository variable RELEASE_MODE=alias.
+export LAMBDA_RELEASE_MODE="${LAMBDA_RELEASE_MODE:-latest}"
 
 log() { printf '\033[1;34m[%s]\033[0m %s\n' "$(basename "$0" .sh)" "$*"; }
