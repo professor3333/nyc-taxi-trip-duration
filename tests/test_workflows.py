@@ -151,7 +151,11 @@ def test_alias_mode_verifies_the_candidate_before_it_takes_traffic() -> None:
         "failure() && env.RELEASE_MODE == 'alias' && env.PREV_VERSION != ''"
     )
     assert '--function-version "$PREV_VERSION"' in back["run"]
-    assert names[-2:] == ["Restore the previous image", "Move the live alias back"]
+    assert names[-3:] == [
+        "Restore the previous image",
+        "Move the live alias back",
+        "Put the pins back",
+    ]
 
 
 def test_monitor_probes_what_callers_are_served() -> None:
@@ -162,3 +166,33 @@ def test_monitor_probes_what_callers_are_served() -> None:
     runs = "\n".join(st.get("run", "") for st in job["steps"])
     assert '--invoke "$TARGET"' in runs
     assert '--qualifier "$URL_QUALIFIER"' in runs
+
+
+def test_deploy_pins_serving_and_candidate_images_before_lambda_changes() -> None:
+    """Audit: ECR's keep-last-5 could expire the live or rollback image."""
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    steps = job["steps"]
+    record = names.index("Record the serving image and its pins")
+    push = names.index("Build and push image")
+    pin = names.index("Pin the serving image and the candidate; verify retention")
+    first_change = min(
+        i
+        for i, st in enumerate(steps)
+        if any(
+            c in st.get("run", "")
+            for c in ("update-function-code", "publish-version", "update-alias")
+        )
+    )
+    assert record < push < pin < first_change
+    run = steps[pin]["run"]
+    assert '--digest "$LIVE_IMAGE" --digest "$IMAGE_URI"' in run
+    assert 'check --repo "$REPO"' in run and "--exact" not in run
+    # the success-path trim cannot fail (and so restore) a good release
+    keep = steps[
+        names.index("Keep pins on the live image and its rollback target only")
+    ]
+    assert keep["continue-on-error"] is True and "--exact" in keep["run"]
+    back = steps[names.index("Put the pins back")]
+    assert back["if"].startswith("failure()") and back["continue-on-error"] is True
+    assert "for d in $OLD_PINS" in back["run"]

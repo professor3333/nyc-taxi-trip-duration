@@ -166,6 +166,10 @@ def test_only_deploy_can_change_the_service(roles: dict[str, Any]) -> None:
     assert "lambda:UpdateFunctionCode" in deploy and ecr_push <= deploy
     assert "lambda:UpdateFunctionConfiguration" not in deploy  # lambda.sh's job
     assert "s3:PutObject" not in deploy
+    # pins: only deploy may retag or untag release images
+    for name in ("monitor", "retrain", "reproduce"):
+        assert "ecr:BatchDeleteImage" not in _actions(roles[ROLE.format(name)]), name
+    assert {"ecr:BatchDeleteImage", "ecr:StartLifecyclePolicyPreview"} <= deploy
 
 
 def test_deploy_reads_only_its_own_log_group(roles: dict[str, Any]) -> None:

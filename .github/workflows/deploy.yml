@@ -56,7 +56,11 @@ jobs:
     environment: production
     env:
       FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
+      REPO: ${{ secrets.ECR_REPOSITORY }}
       RELEASE_MODE: ${{ vars.RELEASE_MODE || 'latest' }}
+      # Image pinning needs the ADR-0013 deploy role (ECR tag/preview grants);
+      # on the legacy fallback role it is skipped with a warning.
+      RETENTION: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -90,6 +94,24 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
+
+      # The image Lambda runs now, and the pins as they are, recorded before
+      # anything is pushed: a failed run puts these pins back.
+      - name: Record the serving image and its pins
+        run: |
+          Q=()
+          if [ "$RELEASE_MODE" = "alias" ]; then Q=(--qualifier live); fi
+          LIVE_IMAGE=$(aws lambda get-function --function-name "$FN" "${Q[@]}" \
+            --query Code.ResolvedImageUri --output text)
+          echo "LIVE_IMAGE=$LIVE_IMAGE" >> "$GITHUB_ENV"
+          echo "serving: $LIVE_IMAGE"
+          if [ "$RETENTION" = "true" ]; then
+            OLD_PINS=$(uv run python scripts/ecr_retention.py pinned --repo "$REPO" | tr '\n' ' ')
+            echo "OLD_PINS=$OLD_PINS" >> "$GITHUB_ENV"
+            echo "pinned now: ${OLD_PINS:-none}"
+          else
+            echo "::warning::ECR retention pins skipped: legacy AWS role (run iam.sh + ecr.sh, docs/runbook.md). The serving image is protected only while it is among the newest 5."
+          fi
 
       - name: Build and push image
         env:
@@ -152,6 +174,18 @@ jobs:
             exit 1
           fi
           docker rm -f release-smoke >/dev/null
+
+      # Before Lambda changes: the image serving now (the rollback target of
+      # this release) and the candidate are pinned, and AWS's own lifecycle
+      # evaluator (a dry-run preview) must not expire either. Rejected pushes
+      # then cannot age the serving image out of the repository.
+      - name: Pin the serving image and the candidate; verify retention
+        if: env.RETENTION == 'true'
+        run: |
+          uv run python scripts/ecr_retention.py pin --repo "$REPO" \
+            --digest "$LIVE_IMAGE" --digest "$IMAGE_URI"
+          uv run python scripts/ecr_retention.py check --repo "$REPO" \
+            --protect "$LIVE_IMAGE" --protect "$IMAGE_URI"
 
       - name: Release mode
         env:
@@ -287,6 +321,16 @@ jobs:
           echo "::error::injected failure (workflow_dispatch inject_failure=true): the restore step must now put the previous release back"
           exit 1
 
+      # Pins are exactly the new live image and its rollback target (the
+      # image that served before). Bookkeeping only: both are already pinned,
+      # so a failure here must not fail - and restore - a good release.
+      - name: Keep pins on the live image and its rollback target only
+        if: env.RETENTION == 'true'
+        continue-on-error: true
+        run: |
+          uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact \
+            --digest "$IMAGE_URI" --digest "$LIVE_IMAGE"
+
       # Automatic recovery: the image that was serving before this run goes
       # back, and must be the one running and healthy afterwards. The run
       # stays failed - a restored deploy is still a failed deploy.
@@ -329,3 +373,14 @@ jobs:
             echo "- failed: version $CANDIDATE (\`$IMAGE_URI\`)"
             echo "- restored and verified: version $PREV_VERSION"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A failed run serves what served before (restored above, or never
+      # replaced), so the pins go back to what they were plus that image:
+      # the rejected candidate loses its pin and can expire normally.
+      - name: Put the pins back
+        if: failure() && env.RETENTION == 'true' && env.LIVE_IMAGE != ''
+        continue-on-error: true
+        run: |
+          ARGS=(--digest "$LIVE_IMAGE")
+          for d in $OLD_PINS; do ARGS+=(--digest "$d"); done
+          uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact "${ARGS[@]}"

@@ -161,8 +161,19 @@ def test_ecr_fresh_repository_scans_is_immutable_and_keeps_five(tmp_path: Path) 
     st = run(tmp_path, "ecr.sh")
     (repo,) = st["repos"].values()
     assert repo["scan"] == "scanOnPush=true" and repo["mutability"] == "IMMUTABLE"
-    (rule,) = repo["lifecycle"]["rules"]
-    assert rule["selection"]["countNumber"] == 5
+    committed = json.loads(
+        (
+            Path(__file__).resolve().parents[1] / "deploy/aws/ecr-lifecycle.json"
+        ).read_text()
+    )
+    assert repo["lifecycle"] == committed  # applied exactly as committed
+    pins, rest = sorted(repo["lifecycle"]["rules"], key=lambda r: r["rulePriority"])
+    assert pins["selection"]["tagPrefixList"] == ["keep-"]  # live + rollback first
+    assert rest["selection"] == {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 5,
+    }
 
 
 def test_ecr_rerun_turns_scanning_back_on(tmp_path: Path) -> None:

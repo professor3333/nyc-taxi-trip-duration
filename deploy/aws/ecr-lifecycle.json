@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "never expire pinned images: the live release and its rollback target (scripts/ecr_retention.py)",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 2,
+      "description": "keep the last 5 of everything else",
+      "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+      "action": {"type": "expire"}
+    }
+  ]
+}
