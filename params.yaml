@@ -51,6 +51,14 @@ api:                        # ADR-0009 — accepted departure_time window (inclu
   max_body_bytes: 32768       # 413 before JSON parsing; a full batch is ~12 KB
   predict_workers: 1          # predictions run off the event loop, one at a time (ADR-0012)
 
+promotion:                  # ADR-0007 amendment - read by gate_candidate.py and promote.py, not a stage
+  min_relative_improvement: 0.01   # candidate MAE at least 1% below the champion's on the same month
+  confidence: 0.95                 # ...and the day-block bootstrap's lower bound above zero
+  bootstrap_resamples: 2000
+  slice_min_n: 2000                # slices smaller than this are reported, not gated
+  slice_max_regression: 0.03       # no gated slice may be more than 3% worse
+  gated_families: [period, airport, borough_pair, route]
+
 monitoring:                 # ADR-0011 — prospective evaluation of the champion on each new month
   mae_degradation_ratio: 1.15   # alert when prospective MAE > promotion-time test MAE x this
 

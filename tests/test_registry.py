@@ -62,6 +62,15 @@ def test_gate_requires_same_month_and_lower_mae() -> None:
     assert not g.passed and "test months differ" in g.reasons[0]
 
 
+def test_gate_requires_a_worthwhile_improvement() -> None:
+    champ = _tags(mae_test_model=4.0)
+    assert promotion_gate(_tags(mae_test_model=3.95), champ, None, 0.01).passed
+    g = promotion_gate(_tags(mae_test_model=3.97), champ, None, 0.01)  # 0.75%
+    assert not g.passed and "minimum worth a release is 1.0%" in g.reasons[0]
+    # without a threshold any strictly lower MAE passes (the old rule)
+    assert promotion_gate(_tags(mae_test_model=3.97), champ).passed
+
+
 def test_gate_uses_champion_prospective_mae_when_months_differ() -> None:
     champ = _tags(mae_test_model=4.7, test_month="2024-12")
     chal = _tags(mae_test_model=5.0, mae_test_fallback=5.6, test_month="2025-01")
@@ -148,10 +157,25 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
         )
         return int(mv.version)
 
+    # The recorded gate verdict (scripts/gate_candidate.py) for the month the
+    # versions are tested on; every version here is the same tiny model.
+    monitoring = tmp_path / "monitoring"
+    monitoring.mkdir()
+    (monitoring / "gate-2024-12.json").write_text(
+        json.dumps(
+            {
+                "verdict": "pass",
+                "reasons": [],
+                "candidate": {"model_md5": reg.file_md5(tiny_artefacts / "model.pkl")},
+            }
+        )
+    )
+
     return {
         "uri": uri,
         "client": client,
         "add": add_version,
+        "monitoring": monitoring,
         "file": tmp_path / "champion.json",
         "log": tmp_path / "promotions.md",
         "meta": tmp_path / "champion_meta.json",
@@ -182,6 +206,7 @@ def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
         reason=kw.pop("reason", "test"),
         model_name=MODEL,
         files=r["files"],
+        monitoring_dir=kw.pop("monitoring_dir", r["monitoring"]),
         **kw,
     )
 
@@ -261,6 +286,54 @@ def test_promote_refuses_when_gate_fails_unless_forced(
     assert reg.resolve_alias(r["client"], "champion", MODEL) == v1  # unchanged
     s = _promote(r, v2, force=True, reason="testing forced path")
     assert s.version == v2 and s.reason.startswith("FORCED")
+
+
+def test_promote_requires_a_passing_gate_report_for_these_bytes(
+    registry: dict[str, Any], tmp_path: Path
+) -> None:
+    """The slice/bootstrap verdict counts only for the model it judged."""
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1)  # first promotion: nothing to compare against, no report needed
+    empty = tmp_path / "no-reports"
+    empty.mkdir()
+    with pytest.raises(RegistryError, match="no gate report"):
+        _promote(r, v2, monitoring_dir=empty)
+
+    other = tmp_path / "other-model"
+    other.mkdir()
+    rep = json.loads((r["monitoring"] / "gate-2024-12.json").read_text())
+    (other / "gate-2024-12.json").write_text(
+        json.dumps({**rep, "candidate": {"model_md5": "0" * 32}})
+    )
+    with pytest.raises(RegistryError, match="not this version's"):
+        _promote(r, v2, monitoring_dir=other)
+
+    failed = tmp_path / "failed"
+    failed.mkdir()
+    (failed / "gate-2024-12.json").write_text(
+        json.dumps(
+            {**rep, "verdict": "fail", "reasons": ["slice airport=from_JFK worse"]}
+        )
+    )
+    with pytest.raises(RegistryError, match="from_JFK"):
+        _promote(r, v2, monitoring_dir=failed)
+    assert reg.resolve_alias(r["client"], "champion", MODEL) == v1  # unchanged
+
+    s = _promote(r, v2, monitoring_dir=failed, force=True, reason="owner override")
+    assert s.version == v2 and "from_JFK" in s.reason and s.reason.startswith("FORCED")
+
+
+def test_promote_refuses_an_improvement_too_small_to_matter(
+    registry: dict[str, Any],
+) -> None:
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.69)  # 0.2% better: below params.yaml's 1%
+    _promote(r, v1)
+    with pytest.raises(RegistryError, match="minimum worth a release"):
+        _promote(r, v2)
 
 
 def test_promote_refuses_when_alias_and_file_disagree(registry: dict[str, Any]) -> None:
@@ -418,6 +491,12 @@ def test_artefact_md5_mismatch_is_refused_before_anything_changes(
     r = registry
     _v1, _ = _two_versions_promoted_first(r)
     bad = r["add"](mae_test_model=4.4, model_md5="0" * 32)
+    # A gate report for the md5 the tags claim, so the artefact check (not
+    # the gate-report binding) is what refuses.
+    rep = r["monitoring"] / "gate-2024-12.json"
+    rep.write_text(
+        json.dumps({"verdict": "pass", "candidate": {"model_md5": "0" * 32}})
+    )
     before = _snapshot(r)
     with pytest.raises(RegistryError, match="model.pkl md5"):
         _promote(r, bad)
