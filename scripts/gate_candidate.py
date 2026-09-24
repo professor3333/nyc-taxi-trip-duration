@@ -11,6 +11,11 @@ Comparing a candidate's test MAE with a champion's MAE from a different month
 compares traffic, not models, so a missing prospective evaluation is a fail,
 not a pass.
 
+When the candidate's test month is the champion's own test month, the
+aggregate comparison uses the champion's recorded test MAE, and the slice
+table comes from ``prospective_eval.py --champion-test-month``; without it the
+verdict is a fail. A same-month candidate is not exempt from the safeguards.
+
 On top of the aggregate comparison (``registry.promotion_gate``) it applies
 the safeguards in ``gate.py`` to the candidate's ``reports/eval/test_slices.csv``
 and the champion's ``reports/monitoring/<month>-slices.csv``: a minimum
@@ -79,12 +84,22 @@ def main() -> int:
         "test_month": champ["test_month"],
     }
 
-    prospective_path = args.monitoring_dir / f"{args.month}.json"
-    prospective: float | None = None
-    if prospective_path.exists():
-        rep = json.loads(prospective_path.read_text())
+    # The champion's evaluation on this month: prospective when its test month
+    # is earlier, a rescore of its own test month when they are the same.
+    # Only a report naming the current champion counts; its slice table is
+    # what the safeguards compare against, in both cases.
+    same_month = champ["test_month"] == args.month
+    champ_eval_path = args.monitoring_dir / f"{args.month}.json"
+    champ_eval: dict[str, Any] | None = None
+    if champ_eval_path.exists():
+        rep = json.loads(champ_eval_path.read_text())
         if int(rep.get("champion_version", -1)) == int(champ["version"]):
-            prospective = float(rep["model"]["mae"])
+            champ_eval = rep
+    prospective = (
+        float(champ_eval["model"]["mae"])
+        if champ_eval is not None and not same_month
+        else None
+    )
 
     gate = promotion_gate(
         challenger, champion, prospective, policy.min_relative_improvement
@@ -93,8 +108,14 @@ def main() -> int:
 
     champ_slices = args.monitoring_dir / f"{args.month}-slices.csv"
     safeguards: dict[str, Any] | None = None
-    if prospective is None:
-        pass  # already a fail: nothing to compare slices against
+    if champ_eval is None:
+        if same_month:  # the aggregate comparison alone is not a pass
+            reasons.append(
+                f"no slice comparison: champion v{champ['version']} has no "
+                f"evaluation of its own test month {args.month} "
+                f"(prospective_eval.py --month {args.month} --champion-test-month)"
+            )
+        # otherwise promotion_gate already failed: no prospective evaluation
     elif not args.candidate_slices.exists() or not champ_slices.exists():
         missing = [
             str(p) for p in (args.candidate_slices, champ_slices) if not p.exists()
@@ -147,11 +168,15 @@ def main() -> int:
     )
 
     verdict = report["verdict"].upper()
-    basis = (
-        f"champion v{champ['version']} prospective {prospective:.4f}"
-        if prospective is not None
-        else f"champion v{champ['version']} has no prospective eval on {args.month}"
-    )
+    if same_month:
+        basis = (
+            f"champion v{champ['version']} on its own test month "
+            f"{float(champ['mae_test_model']):.4f}"
+        )
+    elif prospective is not None:
+        basis = f"champion v{champ['version']} prospective {prospective:.4f}"
+    else:
+        basis = f"champion v{champ['version']} has no prospective eval on {args.month}"
     print(
         f"{args.month}: candidate MAE {ev['test']['model']['mae']:.4f} "
         f"(fallback {ev['test']['fallback']['mae']:.4f}) vs {basis} -> {verdict}"

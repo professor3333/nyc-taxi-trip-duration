@@ -237,3 +237,57 @@ def test_the_report_binds_what_promotion_checks(tmp_path: Path) -> None:
     assert reg.gate_report_reasons(challenger, champion, policy, d) == []
     moved = reg.gate_report_reasons(challenger, replace(champion, version=4), policy, d)
     assert any("champion.version=3" in x for x in moved)
+
+
+def _same_month_eval(tmp_path: Path, month: str, mae: float, version: int = 3) -> Path:
+    """What prospective_eval.py --champion-test-month writes."""
+    d = tmp_path / "monitoring"
+    d.mkdir(exist_ok=True)
+    (d / f"{month}.json").write_text(
+        json.dumps(
+            {"prospective": False, "champion_version": version, "model": {"mae": mae}}
+        )
+    )
+    return d
+
+
+def test_same_month_candidate_without_champion_slices_fails(tmp_path: Path) -> None:
+    """The gap: with equal test months the aggregate comparison used the
+    champion's recorded MAE and the safeguards were skipped, so this passed."""
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-01")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = tmp_path / "monitoring"
+    d.mkdir()
+    r = _run(m, c, d, "2025-01")
+    assert r["verdict"] == "fail" and r["safeguards"] is None
+    assert any("--champion-test-month" in x for x in r["reasons"])
+
+
+def test_same_month_candidate_is_held_to_the_slice_safeguards(tmp_path: Path) -> None:
+    m = _write(tmp_path, cand=3.61, fb=4.00, month="2025-01")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _same_month_eval(tmp_path, "2025-01", mae=3.79)
+    _slices(tmp_path, "2025-01", cand_noise=0.998)  # aggregate passes; slice gain 0.2%
+    r = _run(m, c, d, "2025-01")
+    assert r["verdict"] == "fail" and r["safeguards"] is not None
+    assert any("minimum worth a release" in x for x in r["reasons"])
+    assert "on its own test month" in r["_stdout"]
+
+
+def test_same_month_candidate_with_a_real_gain_passes(tmp_path: Path) -> None:
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-01")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _same_month_eval(tmp_path, "2025-01", mae=3.79)
+    _slices(tmp_path, "2025-01", cand_noise=0.9)
+    r = _run(m, c, d, "2025-01")
+    assert r["verdict"] == "pass", r["reasons"]
+    assert r["safeguards"]["improvement"]["lower"] > 0
+
+
+def test_same_month_slices_of_another_champion_do_not_count(tmp_path: Path) -> None:
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-01")
+    c = _champion(tmp_path, mae=3.79, month="2025-01", version=3)
+    d = _same_month_eval(tmp_path, "2025-01", mae=3.79, version=2)
+    _slices(tmp_path, "2025-01", cand_noise=0.9)
+    r = _run(m, c, d, "2025-01")
+    assert r["verdict"] == "fail" and r["safeguards"] is None
