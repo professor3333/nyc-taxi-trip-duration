@@ -209,16 +209,58 @@ metrics appear after the migration, or add `Resource=fn:live`.
 
 **Consequences.**
 - Every alias-mode deploy leaves a published version behind (free). Each one
-  pins its image. The ECR rule keeps the 5 most recent pushes of *any* tag,
-  and images rejected by the scan or the smoke test count too, because both
-  run after the push. Five failed pushes in a row would therefore expire the
-  image `live` runs on, and a version whose image expired is no longer a
-  rollback target. The same was already true of `PREV_IMAGE` in `latest`
-  mode. Open follow-up: smoke-test before pushing (build `--load`, then
-  `docker push`). It needs one real push to confirm Lambda accepts the
-  resulting manifest, so it is not done here.
+  pins its image in the sense that it needs it to exist. ECR retention is
+  therefore explicit (amendment below).
 - Configuration changes by `lambda.sh` (memory, environment) reach `live`
   only with the next published version, that is the next deploy.
+
+## Amendment, 2026-09-24 — ECR retention protects the live and rollback images
+
+**Finding (external audit).** The lifecycle policy kept the newest 5 images
+of any tag. Rejected releases are pushed too, because the scan and the smoke
+test run after the push. A few failed deploys could therefore age the
+serving image, or its rollback target, out of the repository. AWS documents
+that a Lambda function whose image is deleted can go to `Failed`.
+
+**Measured the same day (read-only, including an AWS lifecycle dry run):**
+5 images, exactly the limit. Lambda serves the newest (`sha256:41b4…`, v1).
+The previous serving image (`sha256:6727…`, v3) is third-newest, so three
+more pushes of any outcome would expire it. The dry run expired nothing *yet*.
+
+**Decision.** Pins plus a rule AWS cannot override.
+- `deploy/aws/ecr-lifecycle.json`, applied by `ecr.sh`. Rule 1 (tagged,
+  prefix `keep-`, count > 10) comes before rule 2 (any, keep last 5). AWS:
+  "An image that matches the tagging requirements of a rule cannot be expired
+  or archived by a rule with a lower priority." Pinned images still count
+  toward rule 2's 5, so up to 5 unpinned images are kept, plus the pins.
+- `scripts/ecr_retention.py` pins by adding the tag `keep-sha256-<digest>`.
+  This retag is allowed on an IMMUTABLE repository. It unpins by deleting
+  only that tag, and never an image's last tag, because deleting the last
+  tag through `BatchDeleteImage` deletes the image.
+- `deploy.yml`: before the push it records the serving image and the current
+  pins. Before Lambda changes it pins the serving image and the candidate,
+  then `check` must pass: the policy has the keep rule first, both digests
+  carry their pins, and **AWS's own lifecycle preview** does not list either.
+  So the preview, not our reading of the documentation, decides. After
+  success, the pins become exactly {new live, previous live}; that step
+  cannot fail the release. After a failure, the previous pins come back plus
+  the serving image, so the rejected candidate is unpinned and expires
+  normally.
+- These steps need the ADR-0013 deploy role. On the legacy fallback role the
+  run warns and skips them, so a rollback deploy is never blocked by retention
+  bookkeeping.
+
+**Tests** (`tests/test_ecr_retention.py`). A simulator of the documented
+evaluation rules, which reproduces AWS's example B. 5, 12 and 40 rejected
+releases never expire the pinned live or rollback image. Negative control:
+under the old policy, and under the new rule without pins, 5 rejected
+releases do expire the live image. The pin, unpin and check paths run
+against a fake ECR with ECR's last-tag semantics, and each way `check` can
+fail is exercised. `tests/test_workflows.py` checks the step order;
+`tests/test_iam.py` checks that only the deploy role can untag.
+
+**Cost.** At most 2 images beyond the 5, about 0.2 GB each at $0.10/GB-month:
+under $0.05/month.
 
 ## Consequences
 

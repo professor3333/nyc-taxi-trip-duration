@@ -59,12 +59,23 @@ What happens after that depends on the repository variable `RELEASE_MODE`:
 
 Either way, a restored deploy leaves `models/champion.json` naming the new champion. `monitor.yml` reports the version mismatch until you fix and redeploy, or run a model rollback (below). Drill: `gh workflow run deploy.yml -f inject_failure=true`. It fails after all checks pass, so the restore can be observed.
 
+## ECR retention (pins)
+
+The live image and its rollback target carry the tag `keep-sha256-<digest>`. The lifecycle rule for that prefix comes first, so the keep-last-5 rule cannot expire them (ADR-0008 amendment, 2026-09-24). `deploy.yml` maintains the pins. To inspect them by hand:
+
+```
+uv run python scripts/ecr_retention.py pinned --repo nyc-taxi-trip-duration
+uv run python scripts/ecr_retention.py check  --repo nyc-taxi-trip-duration --protect "$LIVE"   # AWS dry run
+```
+
+After a manual `lambda.sh <image>`, pin that image before the next push: `uv run python scripts/ecr_retention.py pin --repo nyc-taxi-trip-duration --digest <image>`.
+
 ## Migrate to verified releases (`RELEASE_MODE=alias`, one time)
 
-Prerequisite: the ADR-0013 roles are live (`iam.sh` applied, the `AWS_*_ROLE_ARN` secrets set). The legacy `AWS_ROLE_ARN` cannot publish versions or move aliases, and `deploy.yml` refuses alias mode without `AWS_DEPLOY_ROLE_ARN`. In order:
+Prerequisite: the ADR-0013 roles are live (`iam.sh` applied, the `AWS_*_ROLE_ARN` secrets set), and `deploy/aws/ecr.sh` has applied `ecr-lifecycle.json`. Otherwise the first deploy on the new role fails its retention check with `policy: no rule selects the 'keep-' pin tags`. Run it in the same sitting as `iam.sh`: it only replaces the lifecycle policy, and the deploy after it pins the serving image. The legacy `AWS_ROLE_ARN` cannot publish versions or move aliases, and `deploy.yml` refuses alias mode without `AWS_DEPLOY_ROLE_ARN`. In order:
 
 1. `deploy/aws/iam.sh` grants the deploy role `PublishVersion`, `GetAlias` and `UpdateAlias`, and lets it invoke `function:NAME:*`. It lets the monitor role invoke `:live`.
-2. `LIVE=$(aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text)`. This is the image serving now, so the migration does not change what runs.
+2. `LIVE=$(aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text)` (on 2026-09-24: `…@sha256:41b43311…`, v1). This is the image serving now, so the migration does not change what runs.
 3. `LAMBDA_RELEASE_MODE=alias deploy/aws/lambda.sh "$LIVE"`. It publishes a version of `$LIVE`, creates `live` on it, creates the Function URL on `live` (a **new URL**) with its grants, and deletes the unqualified URL, which would expose `$LATEST`, where candidates wait. Callers of the old URL fail from this moment.
 4. `gh secret set FUNCTION_URL` to the URL it prints. `gh variable set RELEASE_MODE --body alias`.
 5. `gh workflow run monitor.yml` must pass against `:live`. Then run a deploy (`gh workflow run deploy.yml`): the summary shows `live: version N -> N+1`, or no move if the image was unchanged.
