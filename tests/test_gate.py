@@ -5,6 +5,7 @@ slice may get materially worse (ADR-0007 amendment)."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,10 +13,13 @@ import pytest
 
 from tripduration.features import DEPARTURE, DO, PU, TARGET, ReferenceData
 from tripduration.gate import (
+    InvalidEvidenceError,
     MismatchedEvaluationError,
     PromotionPolicy,
     assess,
+    check_matches_aggregate,
     day_block_bootstrap,
+    validate_slice_table,
 )
 from tripduration.slices import TOP_ROUTES, slice_labels, slice_table
 
@@ -166,3 +170,115 @@ def test_bootstrap_is_seeded(ref: ReferenceData) -> None:
     noise = np.random.default_rng(1).normal(0, 3, len(frame))
     t = tables(frame, ref, y + 0.95 * noise, y + noise)
     assert day_block_bootstrap(*t, POLICY) == day_block_bootstrap(*t, POLICY)
+
+
+# --- evidence validation (audit: NaN statistics and missing families passed) -------
+
+
+def _gain(
+    ref: ReferenceData, frame: pd.DataFrame | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    frame = month() if frame is None else frame
+    y = frame[TARGET].to_numpy()
+    noise = np.random.default_rng(1).normal(0, 3, len(frame))
+    return tables(frame, ref, y + 0.9 * noise, y + noise)
+
+
+def test_nan_statistics_are_refused_not_passed(ref: ReferenceData) -> None:
+    """Audit probe 1: NaN compares false, so no reason was produced."""
+    cand, champ = _gain(ref)
+    for col in ("sum_ae_model", "mae_model"):
+        bad = cand.copy()
+        bad[col] = np.nan
+        with pytest.raises(InvalidEvidenceError, match="non-finite"):
+            assess(bad, champ, POLICY)
+        with pytest.raises(InvalidEvidenceError, match="champion"):
+            assess(cand, bad, POLICY)
+
+
+def test_missing_gated_families_are_refused_not_zero_checks(ref: ReferenceData) -> None:
+    """Audit probe 2: valid days, every gated family absent -> pass with
+    slices_checked = 0. Now missing evidence, unlike all-small slices."""
+    cand, champ = _gain(ref)
+    only_days = [t[t["family"] == "day"] for t in (cand, champ)]
+    with pytest.raises(InvalidEvidenceError, match="required families missing"):
+        assess(*only_days, POLICY)
+
+
+@pytest.mark.parametrize(
+    ("corrupt", "match"),
+    [
+        (lambda t: pd.concat([t, t.iloc[[0]]]), "duplicate slice keys"),
+        (lambda t: t.assign(n=t["n"] + 0.5), "positive integer"),
+        (lambda t: t.assign(n=0), "positive integer"),
+        (
+            lambda t: t.assign(
+                sum_ae_model=-t["sum_ae_model"], mae_model=-t["mae_model"]
+            ),
+            "negative",
+        ),
+        (
+            lambda t: t.assign(mae_model=t["mae_model"] * 1.01),
+            "is not 'sum_ae_model' / 'n'",
+        ),
+        (
+            lambda t: t.assign(n=t["n"].astype(str).str.cat(["x"] * len(t))),
+            "non-numeric",
+        ),
+        (lambda t: t.drop(columns="sum_ae_model"), "missing columns"),
+        (
+            lambda t: t.assign(slice=t["slice"].where(t.index != t.index[0])),
+            "empty family or slice",
+        ),
+        # a covering family that lost rows no longer adds up to the month
+        (
+            lambda t: t.drop(t.index[t["family"] == "period"][:1]),
+            "family 'period' covers",
+        ),
+    ],
+)
+def test_malformed_tables_are_refused(
+    ref: ReferenceData, corrupt: Any, match: str
+) -> None:
+    cand, _ = _gain(ref)
+    with pytest.raises(InvalidEvidenceError, match=match):
+        validate_slice_table(corrupt(cand), POLICY)
+
+
+def test_airport_family_missing_with_airport_trips_is_refused(
+    ref: ReferenceData,
+) -> None:
+    cand, champ = _gain(ref)  # month() has JFK, LGA and EWR pickups
+    no_air = [t[t["family"] != "airport"] for t in (cand, champ)]
+    with pytest.raises(InvalidEvidenceError, match="'airport' is missing"):
+        assess(*no_air, POLICY)
+
+
+def test_a_month_without_airport_trips_is_legitimately_empty(
+    ref: ReferenceData,
+) -> None:
+    frame = month()
+    frame = frame[~frame[PU].isin([1, 132, 138]) & ~frame[DO].isin([1, 132, 138])]
+    cand, champ = _gain(ref, frame.reset_index(drop=True))
+    assert "airport" not in set(cand["family"])
+    reasons, details = assess(cand, champ, POLICY)
+    assert reasons == [] and details["families_empty"] == ["airport"]
+
+
+def test_a_champion_with_zero_error_fails_closed(ref: ReferenceData) -> None:
+    frame = month()
+    y = frame[TARGET].to_numpy()
+    cand, champ = tables(frame, ref, y + 1.0, y)
+    reasons, _ = assess(cand, champ, POLICY)
+    assert any("could not be computed" in r for r in reasons)
+
+
+def test_slice_table_must_match_its_aggregate(ref: ReferenceData) -> None:
+    cand, _ = _gain(ref)
+    d = cand[cand["family"] == "day"]
+    mae = float(d["sum_ae_model"].sum() / d["n"].sum())
+    check_matches_aggregate(cand, mae)
+    with pytest.raises(InvalidEvidenceError, match="not the same evaluation"):
+        check_matches_aggregate(cand, mae * 1.001)
+    with pytest.raises(InvalidEvidenceError, match="not the same evaluation"):
+        check_matches_aggregate(cand, float("nan"))

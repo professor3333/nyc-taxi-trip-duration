@@ -208,6 +208,40 @@ verdict is a fail. Tests: `tests/test_gate_candidate.py` (same-month without
 slices fails, a 0.2% same-month gain fails the safeguards, a real gain
 passes, another champion's slices do not count).
 
+**Evidence is validated before it is judged (amended 2026-09-24, audit
+finding).** Two probes passed the safeguards on evidence that could not
+support a verdict. First, NaN statistics: every comparison against NaN is
+false, so neither "improvement too small" nor "slice regressed" fired.
+Second, slice tables holding only the `day` rows passed with
+`slices_checked = 0`. `gate.assess` now validates both tables first and
+raises `EvidenceError` (a fail in the gate report, with the reason) unless:
+
+- `n` is a positive integer, `sum_ae_*` and `mae_*` are finite and
+  non-negative, and `mae == sum_ae / n`. There are no empty keys and no
+  duplicate `(family, slice)` rows.
+- Every gated family and `day` is present. `period`, `borough_pair` and
+  `day` label every trip, so each must add up to the same trip count, and
+  no family may count more trips than the month.
+- **Legitimate empty vs missing:** `airport` is the only family that can be
+  empty (a month with no airport trips). An absent `airport` family is
+  accepted only if no `route` or `borough_pair` slice shows an airport zone.
+  It is then listed in `safeguards.families_empty`. A family whose slices are
+  all below `slice_min_n` is still present: it is *reported, not gated*,
+  which differs from missing.
+- **Aggregate consistency** (`gate.check_matches_aggregate`, in
+  `gate_candidate.py`): the MAE over the `day` rows must equal the
+  candidate's `metrics/eval.json` test MAE and the champion's evaluation-report
+  MAE (relative 1e-6). Otherwise the tables are not the evaluation the
+  aggregate gate was computed on.
+
+After validation, comparisons are written to fail closed. A non-finite
+improvement (a champion whose error sums to zero) is a reason, and a NaN slice
+ratio counts as regressed. Checked against the 23 real backtest slice tables:
+no false rejections. Tests: `tests/test_gate.py` (both audit probes, nine
+malformations, airport missing vs legitimately empty, zero-error champion,
+aggregate mismatch) and `tests/test_gate_candidate.py` (family-less tables
+and a mismatched prospective MAE fail end to end).
+
 **Calibration on real data (2026-09-24).** The retrain candidate for 2025-04
 (trained 2024-10..2025-02) was compared with v3 (trained 2024-10..2024-11),
 both scored on all 3,805,957 valid 2025-04 trips. The improvement was +4.30%,
