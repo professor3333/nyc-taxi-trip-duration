@@ -24,7 +24,7 @@ fitted until a human has looked.
 | `enough_raw_rows` | ≥ 1,000,000 | truncated or partial download (a real month is 3.4–3.9M) |
 | `enough_valid_rows` | ≥ 500,000 | a month that parses but is mostly unusable |
 | `reject_rate_within_bounds` | ≤ 10% | ADR-0002 removes ~3.3–3.9%; 10% means the data or the rules changed |
-| `null_rate_<column>` | pickup/dropoff/zones 0%, `passenger_count` ≤ 25% | a feed dropping fields; zones and timestamps may never be null |
+| `null_rate_<column>` | pickup/dropoff/zones 0%, `passenger_count` ≤ 40% | a feed dropping fields; zones and timestamps may never be null. `passenger_count` is null on app-dispatched trips, 25.1–30.1% of rows in 2025-05..2026-05 (ADR-0002 amendment 2026-09-24) |
 | `zone_ids_in_range` | 1–265 | a reshaped file or a wrong join key |
 | `median_duration_plausible` | p50 ∈ [5, 30] min | timestamps in the wrong unit, or dropoff/pickup swapped |
 | `p99_duration_plausible` | p99 ∈ [30, 180] min | a tail that no longer looks like taxi trips |

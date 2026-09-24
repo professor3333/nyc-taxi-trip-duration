@@ -17,8 +17,9 @@ static reference data shipped with the model.
 `tpep_dropoff_datetime`, `trip_distance`, `fare_amount`, `extra`, `mta_tax`,
 `tip_amount`, `tolls_amount`, `improvement_surcharge`, `total_amount`,
 `congestion_surcharge`, `airport_fee`, `cbd_congestion_fee`, `payment_type`,
-`ratecode_id`, `store_and_fwd_flag`, `passenger_count`, `vendor_id` —
-all recorded during or after the trip, or unknown to the caller.
+`ratecode_id`, `store_and_fwd_flag`, `passenger_count`, `vendor_id`,
+`request_source` (2026-06+) — all recorded during or after the trip, or
+unknown to the caller.
 
 ## Filters (ADR-0002)
 

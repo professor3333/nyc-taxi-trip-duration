@@ -104,3 +104,38 @@ Effect on the three months (from `reports/validation/`):
 - The 3-hour DST window is generous on purpose; a tighter window (the single
   ambiguous hour plus trips spanning it) is possible later if the lost 0.6% of
   one night matters, which it does not for this use case.
+
+## Amendment (2026-09-24): app-dispatched trips are trips
+
+**Found by the rolling backtest** (backtest.yml run 35948470827), which
+ingested every month 2024-01..2026-07:
+
+- The `quality` stage blocked 7 of the 13 months from 2025-05 to 2026-05 on
+  `null_rate_passenger_count` (25.10–30.10% against a 25% ceiling). That
+  would also block the next scheduled retrain (2025-05).
+- Ingest rejected 2026-06 and 2026-07 as schema drift: a new column,
+  `request_source`.
+
+**Cause.** In 2026-06 the rows with a `request_source` are exactly the rows
+with a null `passenger_count`. The values are `HV0003` (the Uber base
+licence, 927,698 rows), `A` (76,711), `EH0004` (8,107) and `CC` (664);
+street hails are null (2,824,068 rows; 0.01% null passenger count). These
+are yellow cabs dispatched through an app. TLC records no passenger count
+for them. Their growing share explains the null rate going from about 10% in
+2024 to 25–30%. They are real trips of the kind the API is asked about, and
+their median recorded duration is longer (17.3 vs 12.7 min in 2026-06).
+
+**Decision.**
+- Accept `request_source` as an optional raw column
+  (`configs/schema_raw.yaml`): null for months before it existed, never a
+  feature (`schema.POST_TRIP_COLUMNS`, since the caller does not send it),
+  and never a filter. No validity rule changes: dropping app-dispatched trips
+  would remove a quarter of the population the API serves (G3).
+- Raise the `passenger_count` null ceiling from 25% to 40%. The rule guards
+  against a feed dropping fields. It is not about the trips, because
+  `passenger_count` is not a feature. 40% keeps that guard (a broken feed
+  goes far above it) with headroom over the measured maximum of 30.1%.
+
+**Consequences.** The booking channel is a population shift the model can't
+see: a rising app share raises typical durations on the same request. The
+backtest and prospective evaluation measure its effect; it is not modelled.

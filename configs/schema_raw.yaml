@@ -35,3 +35,6 @@ columns:
   congestion_surcharge:   {dtype: float64,       variants: [congestion_surcharge]}
   airport_fee:            {dtype: float64,       variants: [Airport_fee, airport_fee], optional: true}
   cbd_congestion_fee:     {dtype: float64,       variants: [cbd_congestion_fee],       optional: true}
+  # 2026-06+: how the trip was booked (HV0003 = the Uber base, EH0004, A, CC);
+  # null for street hails. Never a feature: the caller does not send it.
+  request_source:         {dtype: string,        variants: [request_source],           optional: true}
