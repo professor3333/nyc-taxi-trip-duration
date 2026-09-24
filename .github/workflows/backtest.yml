@@ -1,0 +1,153 @@
+name: backtest
+
+# Rolling-origin backtest (src/tripduration/backtest.py, docs/backtest.md):
+# the production recipe replayed once per test month, each fold at the full
+# six-month window, so the model is judged across seasons and the 2025-01
+# congestion-pricing regime, not on one month. Each fold also measures the
+# runner budget at the full window (peak RSS, wall time per phase).
+#
+#   gh workflow run backtest.yml -f first=2024-09 -f last=2026-07
+#
+# Read-only: no AWS role, no DVC remote, no push. Raw months come from TLC
+# (their md5 and ETag are recorded per fold); zone centroids are rebuilt from
+# TLC's shapefile and must hash to the DVC-tracked file. Results are artifacts;
+# the owner commits reports/backtest/ + docs/backtest.md through a PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      first:
+        description: "first test month (YYYY-MM); needs 8 published months ending there"
+        required: true
+        default: "2024-09"
+      last:
+        description: "last test month (YYYY-MM)"
+        required: true
+        default: "2026-07"
+
+permissions: {}
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - name: Test months
+        id: months
+        env:
+          FIRST: ${{ inputs.first }}
+          LAST: ${{ inputs.last }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          first, last = os.environ["FIRST"], os.environ["LAST"]
+          for m in (first, last):
+              if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", m):
+                  raise SystemExit(f"not YYYY-MM: {m!r}")
+          a = int(first[:4]) * 12 + int(first[5:]) - 1
+          b = int(last[:4]) * 12 + int(last[5:]) - 1
+          if b < a:
+              raise SystemExit("last is before first")
+          print("months=" + json.dumps([f"{i // 12}-{i % 12 + 1:02d}" for i in range(a, b + 1)]))
+          PY
+
+  fold:
+    needs: plan
+    runs-on: ubuntu-latest   # 4 vCPU / 16 GB: the retrain runner, so the budget measured here is that one
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
+    env:
+      T: ${{ matrix.month }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: make setup
+
+      - name: Zone centroids, rebuilt and checked against the DVC hash
+        run: |
+          uv run python scripts/build_zone_centroids.py
+          want=$(awk '/md5:/ {print $NF; exit}' data/reference/zone_centroids.csv.dvc)
+          got=$(md5sum data/reference/zone_centroids.csv | cut -d' ' -f1)
+          echo "centroids md5 $got (DVC: $want)"
+          [ "$got" = "$want" ]
+
+      - name: Ingest the fold's eight months
+        run: |
+          read -r -a MONTHS <<< "$(uv run python -m tripduration.backtest --months-for "$T")"
+          uv run python scripts/ingest.py --service yellow --month "${MONTHS[@]}"
+          for m in "${MONTHS[@]}"; do
+            [ -f "data/raw/yellow/$m.parquet" ] || { echo "::error::$m not ingested"; exit 1; }
+          done
+
+      - name: Validate and accept (the pipeline's own stages)
+        run: |
+          scripts/train_env.sh uv run --locked python -m tripduration.validate
+          scripts/train_env.sh uv run --locked python -m tripduration.quality
+
+      - name: Fold
+        run: |
+          TRAIN_ENV_NETWORK=none scripts/train_env.sh uv run --locked \
+            python -m tripduration.backtest --test-month "$T" --run-url "$RUN_URL" 2>&1 | tee fold.log
+          jq -c '{test_month, model: .test.model.mae, fallback: .test.fallback.mae, peak_rss_mb: .resources.peak_rss_mb, seconds: .resources.total_seconds}' \
+            "reports/backtest/$T.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-${{ matrix.month }}
+          path: |
+            reports/backtest/
+            reports/validation/
+            reports/quality/
+          retention-days: 90
+          if-no-files-found: error
+
+  summary:
+    needs: fold
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: backtest-*
+          path: reports/
+          merge-multiple: true
+      - name: Render docs/backtest.md
+        run: |
+          uv run --locked python scripts/backtest_summary.py
+          cat docs/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-summary
+          path: |
+            reports/backtest/
+            reports/validation/
+            reports/quality/
+            docs/backtest.md
+          retention-days: 90
+          if-no-files-found: error
