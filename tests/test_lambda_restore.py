@@ -171,13 +171,27 @@ def _run(script: str, tmp: Path) -> tuple[int, str]:
     return rc, log.read_text() if log.exists() else ""
 
 
+# The restore step as it was on main at 0ce7dd5, verbatim (CI's checkout is
+# shallow, so it is embedded rather than read from git history).
+OLD_RESTORE_STEP = r"""echo "::warning::deploy failed after the update; restoring $PREV_IMAGE"
+aws lambda wait function-updated --function-name "$FN"
+aws lambda update-function-code --function-name "$FN" --image-uri "$PREV_IMAGE" >/dev/null
+aws lambda wait function-updated --function-name "$FN"
+RUNNING=$(aws lambda get-function --function-name "$FN" --query Code.ImageUri --output text)
+test "$RUNNING" = "$PREV_IMAGE" || { echo "::error::restore failed: running $RUNNING"; exit 1; }
+# Health of what is now serving; its version is whatever PREV was.
+uv run python scripts/deploy_check.py --invoke "$FN" --malformed
+{
+  echo "### Deploy failed; previous image restored"
+  echo "- failed: \`$IMAGE_URI\`"
+  echo "- restored and verified: \`$PREV_IMAGE\`"
+} >> "$GITHUB_STEP_SUMMARY"
+"""  # noqa: E501
+
+
 def test_old_restore_step_exited_before_restoring(tmp_path: Path) -> None:
-    """Negative control: main before this change, the audit's reproduction."""
-    old = subprocess.run(
-        ["git", "show", "0ce7dd5:.github/workflows/deploy.yml"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout  # fmt: skip
-    rc, calls = _run(_deploy_steps(old)["Restore the previous image"]["run"], tmp_path)
+    """Negative control: the audit's reproduction against the old step."""
+    rc, calls = _run(OLD_RESTORE_STEP, tmp_path)
     assert rc != 0 and "update-function-code" not in calls
 
 
