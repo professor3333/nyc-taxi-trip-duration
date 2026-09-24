@@ -1,0 +1,35 @@
+{
+  "month": "2024-12",
+  "champion_version": 1,
+  "target": "function URL (SigV4)",
+  "rows": 5000,
+  "offline_environment": {
+    "platform": "Linux-7.0.14-orbstack-00380-ga7e0a2dc9535-x86_64-with-glibc2.41",
+    "machine": "x86_64"
+  },
+  "checked_at": "2026-09-24T02:35:14+00:00",
+  "versions_served": [
+    "v1"
+  ],
+  "kinds_served": [
+    "model"
+  ],
+  "parity": {
+    "max_abs_diff": 0.0,
+    "rows_differing": 0,
+    "tolerance": 0.005
+  },
+  "accuracy": {
+    "live_mae": 4.702129333333334,
+    "ci95": [
+      4.540762633333333,
+      4.863475816666667
+    ],
+    "offline_mae_same_rows": 4.702129333333334,
+    "live_p90_ae": 10.593666666666671,
+    "recorded_mae": 4.688721,
+    "recorded_source": "champion.json test MAE"
+  },
+  "verdict": "pass",
+  "failures": []
+}
