@@ -396,6 +396,7 @@ def test_endpoint_table(client: TestClient) -> None:
         "model_kind",
         "fallback_version",
         "champion_version",
+        "release_id",
         "git_sha",
         "train_months",
         "feature_count",
@@ -589,3 +590,35 @@ def test_parity_offline_pipeline_vs_api(client: TestClient, model_dir: Path) -> 
     ]
     batch = client.post("/predict/batch", json={"items": items}).json()["predictions"]
     assert batch == [round(float(x), 2) for x in offline[:5]]
+
+
+# --- release identity (ADR-0014) ------------------------------------------------------
+
+
+def test_version_reports_the_release_id_baked_into_the_image(
+    model_dir: Path, tmp_path: Path
+) -> None:
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    rid = "ab" * 32
+    (d / "release.json").write_text(json.dumps({"release_id": rid}))
+    with TestClient(create_app(_settings(d))) as c:
+        assert c.get("/version").json()["release_id"] == rid
+        assert c.get("/health").json()["status"] == "ok"
+
+
+def test_a_dev_build_without_a_manifest_reports_no_release(client: TestClient) -> None:
+    assert client.get("/version").json()["release_id"] is None
+
+
+def test_an_unreadable_manifest_is_degraded_not_silent(
+    model_dir: Path, tmp_path: Path
+) -> None:
+    d = tmp_path / "m"
+    shutil.copytree(model_dir, d)
+    (d / "release.json").write_text('{"release_id": 5}')
+    with TestClient(create_app(_settings(d))) as c:
+        h = c.get("/health").json()
+        assert h["status"] == "degraded" and "release.json" in h["release_error"]
+        assert c.get("/version").json()["release_id"] is None
+        assert c.post("/predict", json=GOOD).status_code == 200  # still serves

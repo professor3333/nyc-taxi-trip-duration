@@ -86,6 +86,10 @@ class ChampionState:
     # where it was computed. Measured arm64 vs x86_64: mean 0.043 min, max
     # 0.597 min over the 80-row grid. See docs/reproducibility.md.
     fixture_platform: str = ""
+    # Why champion.json last changed: "promote" or "rollback" (ADR-0014). A
+    # rollback is deployed by restoring that model's recorded release, never
+    # by rebuilding it with today's code; deploy.yml reads this field.
+    action: str = "promote"
 
     @classmethod
     def read(cls, path: Path = CHAMPION_FILE) -> ChampionState | None:
@@ -691,6 +695,7 @@ def _state_for(
     reason: str,
     promoted_at: str,
     fixture_sha256: str,
+    action: str = "promote",
 ) -> ChampionState:
     mv = client.get_model_version(model_name, str(version))
     return ChampionState(
@@ -711,6 +716,7 @@ def _state_for(
         dvc_lock_md5=tags.get("dvc_lock_md5", ""),
         fixture_sha256=fixture_sha256,
         fixture_platform=f"{platform.system()}-{platform.machine()}",
+        action=action,
     )
 
 
@@ -949,6 +955,7 @@ def refresh(
             reason=current.reason,
             promoted_at=current.promoted_at,
             fixture_sha256=sha,
+            action=current.action,
         ),
         log_row=None,
     )
@@ -992,6 +999,7 @@ def rollback(
             reason=reason,
             promoted_at=now,
             fixture_sha256=sha,
+            action="rollback",
         ),
         log_row=lambda st: _row(st, "rollback", current.version, reason),
     )

@@ -76,7 +76,9 @@ COPY --chown=app:app params.yaml ./params.yaml
 COPY --chown=app:app configs/holidays.csv ./configs/holidays.csv
 COPY --chown=app:app ${REFERENCE_SRC}/zone_centroids.csv ./data/reference/zone_centroids.csv
 COPY --chown=app:app ${MODELS_SRC}/model.pkl ${MODELS_SRC}/fallback_table.parquet ${MODELS_SRC}/model_meta.json ./models/
-COPY --chown=app:app ${MODELS_SRC}/champion.json ./models/champion.json
+# release.json (ADR-0014) exists only in deploy builds (scripts/release_manifest.py);
+# the [n] glob makes it optional, so a dev build from models/ still works.
+COPY --chown=app:app ${MODELS_SRC}/champion.json ${MODELS_SRC}/release.jso[n] ./models/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

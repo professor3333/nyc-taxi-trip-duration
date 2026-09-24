@@ -29,6 +29,7 @@ from tripduration.features import (
     ReferenceData,
     build_features,
 )
+from tripduration.release import read_release
 from tripduration.train import FALLBACK_FILE, META_FILE, MODEL_FILE
 
 log = logging.getLogger(__name__)
@@ -232,6 +233,7 @@ class Predictor:
         self.kind: ModelKind = "none"
         self.model_version = "unavailable"
         self.champion_version: str | None = None
+        self.release_id: str | None = None
         try:
             self._load()
         except Exception as e:  # last line of defence: up, and unavailable
@@ -259,6 +261,17 @@ class Predictor:
             )
         champion, self.release_error = _read_champion(s.model_dir / "champion.json")
         self.champion_version = f"v{champion['version']}" if champion else None
+        # The release this image is (ADR-0014): None for a dev build or an
+        # image built before release manifests; unreadable is degraded.
+        self.release_id, manifest_error = read_release(s.model_dir)
+        if manifest_error:
+            log.error(
+                "release manifest unreadable; release_id unknown",
+                extra={"event": "release_manifest_invalid", "error": manifest_error},
+            )
+            self.release_error = "; ".join(
+                e for e in (self.release_error, f"release.json: {manifest_error}") if e
+            )
 
         try:
             self.model, self.meta = self._load_model(s.model_dir)

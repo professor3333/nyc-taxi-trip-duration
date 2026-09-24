@@ -134,6 +134,8 @@ class VersionResponse(BaseModel):
     model_kind: Literal["model", "fallback", "none"]
     fallback_version: str
     champion_version: str | None
+    # Content id of this image's release (ADR-0014); None for a dev build.
+    release_id: str | None = None
     git_sha: str
     train_months: list[str]
     feature_count: int

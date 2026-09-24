@@ -142,7 +142,16 @@ def test_monitor_can_probe_but_change_nothing(roles: dict[str, Any]) -> None:
         "lambda:InvokeFunctionUrl",
         "lambda:GetFunctionUrlConfig",
         "cloudwatch:PutMetricData",
+        "s3:GetObject",  # releases/live.json only: which release is deployed
     }
+    (read,) = [
+        st
+        for st in roles[ROLE.format("monitor")]["policies"][ROLE.format("monitor")][
+            "Statement"
+        ]
+        if st["Action"] == "s3:GetObject"
+    ]
+    assert read["Resource"].endswith("/releases/live.json")
     (put,) = [
         st
         for st in roles[ROLE.format("monitor")]["policies"][ROLE.format("monitor")][
@@ -165,7 +174,9 @@ def test_only_deploy_can_change_the_service(roles: dict[str, Any]) -> None:
     deploy = _actions(roles[ROLE.format("deploy")])
     assert "lambda:UpdateFunctionCode" in deploy and ecr_push <= deploy
     assert "lambda:UpdateFunctionConfiguration" not in deploy  # lambda.sh's job
-    assert "s3:PutObject" not in deploy
+    assert all(
+        r.endswith("/releases/*") for r in _put_resources(roles[ROLE.format("deploy")])
+    )
     # pins: only deploy may retag or untag release images
     for name in ("monitor", "retrain", "reproduce"):
         assert "ecr:BatchDeleteImage" not in _actions(roles[ROLE.format(name)]), name
@@ -185,11 +196,26 @@ def test_deploy_reads_only_its_own_log_group(roles: dict[str, Any]) -> None:
     )
 
 
+def _put_resources(role: dict[str, Any]) -> list[str]:
+    (policy,) = role["policies"].values()
+    out: list[str] = []
+    for st in policy["Statement"]:
+        acts = {st["Action"]} if isinstance(st["Action"], str) else set(st["Action"])
+        if "s3:PutObject" in acts:
+            res = st["Resource"]
+            out += [res] if isinstance(res, str) else res
+    return out
+
+
 def test_only_training_roles_write_the_dvc_remote(roles: dict[str, Any]) -> None:
     for name in ("retrain", "reproduce"):
         assert "s3:PutObject" in _actions(roles[ROLE.format(name)])
-    for name in ("deploy", "monitor"):
-        assert "s3:PutObject" not in _actions(roles[ROLE.format(name)])
+    assert "s3:PutObject" not in _actions(roles[ROLE.format("monitor")])
+    # deploy writes the release ledger and nothing else (ADR-0014)
+    assert [
+        r.rsplit(":::", 1)[1].split("/", 1)[1]
+        for r in _put_resources(roles[ROLE.format("deploy")])
+    ] == ["releases/*"]
 
 
 def test_iam_sh_prints_one_secret_per_workflow(tmp_path: Path) -> None:

@@ -119,8 +119,14 @@ def test_deploy_smoke_tests_the_release_image_before_any_lambda_change() -> None
     assert smoke < first_change
     run = job["steps"][smoke]["run"]
     assert 'docker run -d --name release-smoke -p 8080:8080 "$IMAGE_URI"' in run
-    for flag in ("--expect-version", "--expect-fixture", "--malformed"):
+    for flag in ("--expect-version", '"${CHECK[@]}"', "--malformed"):
         assert flag in run
+    # CHECK_ARGS carries the fixture in both plans (built: the champion's
+    # fixture; restored: the predictions that release served)
+    plan = job["steps"][
+        names.index("Plan - build a new release or restore a recorded one")
+    ]
+    assert plan["run"].count("CHECK_ARGS=--expect-fixture") == 2
     assert "--allow-degraded" not in run  # the real model must load
 
 
@@ -196,3 +202,72 @@ def test_deploy_pins_serving_and_candidate_images_before_lambda_changes() -> Non
     back = steps[names.index("Put the pins back")]
     assert back["if"].startswith("failure()") and back["continue-on-error"] is True
     assert "for d in $OLD_PINS" in back["run"]
+
+
+def test_rollback_restores_a_recorded_release_and_never_silently_rebuilds() -> None:
+    """Audit: a rollback rebuilt the old model with today's code (ADR-0014)."""
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    steps = job["steps"]
+    plan = names.index("Plan - build a new release or restore a recorded one")
+    run = steps[plan]["run"]
+    # rollback (or a dispatched release_id) -> restore, unless rebuild=true
+    assert '"$ACTION" != "rollback"' in run and '"$REBUILD" = "true"' in run
+    assert "releases.py find" in run and "releases.py get" in run
+    assert run.count("exit 1") >= 4  # no ledger / no record / other model / image gone
+    assert 'echo "PLAN=build"' in run and 'echo "PLAN=restore"' in run
+    assert "--fixture-tolerance 0" in run  # same image: identical predictions
+    # every building step is skipped on a restore
+    for name in (
+        "Fetch champion artefacts from the DVC remote (S3)",
+        "Build and push image",
+        "Vulnerability scan of the release image (trivy)",
+    ):
+        assert steps[names.index(name)]["if"] == "env.PLAN == 'build'", name
+        assert plan < names.index(name)
+    assert (
+        "release_manifest.py"
+        in steps[names.index("Fetch champion artefacts from the DVC remote (S3)")][
+            "run"
+        ]
+    )
+    # a recorded Lambda version is re-activated when it still runs the image
+    publish = steps[names.index("Publish a candidate version (no traffic)")]["run"]
+    assert "RESTORE_LAMBDA_VERSION" in publish
+
+
+def test_every_check_asserts_the_exact_release() -> None:
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    for st in job["steps"]:
+        run = st.get("run", "")
+        if "scripts/deploy_check.py" in run and "--expect-version" in run:
+            assert '--expect-release "$RELEASE_ID"' in run, st["name"]
+
+
+def test_ledger_records_before_traffic_and_marks_live_after_activation() -> None:
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    steps = job["steps"]
+    check = names.index(
+        "Deploy check (cold start first, then version, fixtures, malformed -> 422)"
+    )
+    record = names.index("Record the verified release in the ledger")
+    move = names.index("Move the live alias to the verified version")
+    url = names.index("Deploy check over the Function URL (HTTP)")
+    live = names.index("Mark the release live")
+    assert check < record < move < url < live
+    assert "--record-predictions build/served_predictions.csv" in steps[check]["run"]
+    assert "--evidence build/served_predictions.csv" in steps[record]["run"]
+    # a release that cannot be recorded cannot be rolled back to: it fails
+    assert "continue-on-error" not in steps[record]
+    # the deployed pointer is bookkeeping after success; a failed deploy
+    # never writes it, so it keeps naming what still serves
+    assert steps[live]["continue-on-error"] is True
+    assert live < names.index("Restore the previous image")
+
+
+def test_monitor_compares_the_service_with_the_deployed_release() -> None:
+    job = _wf("monitor.yml")["jobs"]["monitor"]
+    runs = "\n".join(st.get("run", "") for st in job["steps"])
+    assert "releases.py status" in runs
+    assert '${EXPECT_RELEASE:+--expect-release "$EXPECT_RELEASE"}' in runs

@@ -30,6 +30,9 @@ jobs:
       # the unqualified function ($LATEST) may hold a rejected candidate.
       TARGET: ${{ secrets.LAMBDA_FUNCTION_NAME }}${{ vars.RELEASE_MODE == 'alias' && ':live' || '' }}
       URL_QUALIFIER: ${{ vars.RELEASE_MODE == 'alias' && 'live' || '' }}
+      # releases/live.json (ADR-0014) needs the ADR-0013 monitor role.
+      LEDGER: ${{ secrets.AWS_MONITOR_ROLE_ARN != '' }}
+      BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -40,12 +43,25 @@ jobs:
           role-to-assume: ${{ secrets.AWS_MONITOR_ROLE_ARN || secrets.AWS_ROLE_ARN }}   # fallback: legacy role until iam.sh migration (runbook)
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # The selected champion (champion.json) and the deployed release
+      # (releases/live.json) are different facts: a promotion moves the first,
+      # only a successful deploy moves the second. The check below requires the
+      # service to report the release the ledger says is deployed.
+      - name: Selected champion vs deployed release
+        if: env.LEDGER == 'true'
+        continue-on-error: true
+        run: |
+          uv run python scripts/releases.py status --bucket "$BUCKET" | tee -a "$GITHUB_STEP_SUMMARY"
+          RID=$(aws s3 cp "s3://$BUCKET/releases/live.json" - 2>/dev/null | jq -r '.release_id // empty' || true)
+          echo "EXPECT_RELEASE=$RID" >> "$GITHUB_ENV"
+
       - name: Check the live service
         id: check
         continue-on-error: true
         run: |
           uv run python scripts/deploy_check.py --invoke "$TARGET" \
             --expect-version "v$(jq -r .version models/champion.json)" \
+            ${EXPECT_RELEASE:+--expect-release "$EXPECT_RELEASE"} \
             --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt \
             || echo "failed=true" >> "$GITHUB_OUTPUT"
 

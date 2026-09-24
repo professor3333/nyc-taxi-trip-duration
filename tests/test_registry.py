@@ -266,6 +266,39 @@ def test_promote_then_rollback_round_trip(registry: dict[str, Any]) -> None:
     assert "deploy check failed" in log
 
 
+def test_champion_json_says_whether_to_build_or_restore(
+    registry: dict[str, Any],
+) -> None:
+    """deploy.yml builds a new release after a promotion and restores the
+    recorded one after a rollback (ADR-0014); a refresh changes neither."""
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1)
+    _promote(r, v2)
+    assert json.loads(r["file"].read_text())["action"] == "promote"
+    _rollback(r, reason="v2 misbehaves live")
+    assert json.loads(r["file"].read_text())["action"] == "rollback"
+    reg.refresh(r["uri"], model_name=MODEL, files=r["files"])
+    assert json.loads(r["file"].read_text())["action"] == "rollback"
+    _promote(r, v2, force=True, reason="fixed")
+    assert json.loads(r["file"].read_text())["action"] == "promote"
+
+
+def test_a_champion_json_from_before_the_field_reads_as_a_promotion(
+    tmp_path: Path,
+) -> None:
+    state = ChampionState(
+        model_name="m", version=1, run_id="", git_sha="", model_md5="",
+        fallback_md5="", test_month="", mae_test_model=0.0,
+        mae_test_fallback=0.0, promoted_at="", previous_version=None, reason="",
+    )  # fmt: skip
+    doc = json.loads(json.dumps(state.__dict__, default=list))
+    doc.pop("action")
+    (tmp_path / "c.json").write_text(json.dumps(doc))
+    assert ChampionState.read(tmp_path / "c.json").action == "promote"  # type: ignore[union-attr]
+
+
 def test_release_record_and_restored_predictions(registry: dict[str, Any]) -> None:
     """The milestone's criterion: select the previous version, and its
     predictions come back exactly."""
