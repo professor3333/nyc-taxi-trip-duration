@@ -1,4 +1,4 @@
-.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-api compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env live-accuracy
+.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-api compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env live-accuracy release-status
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -118,3 +118,6 @@ lambda-drill: ## Prove lambda.sh creates AND reconciles, on a scratch function i
 
 docker-run:   ## Run the image on :8080
 	docker run --rm -p 8080:8080 tripduration:dev
+
+release-status: ## Selected champion (champion.json) vs deployed release (S3 ledger): make release-status BUCKET=<bucket>
+	uv run python scripts/releases.py status --bucket $${BUCKET:?BUCKET=<s3 bucket>}

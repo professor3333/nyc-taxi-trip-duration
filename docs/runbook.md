@@ -99,7 +99,23 @@ gh pr checks --watch && gh pr merge --squash --delete-branch
 git switch main && git pull
 ```
 
-Then watch `deploy.yml` and run the signed `deploy_check` exactly as in *Release*, with `--expect-version v<m>`. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s); the deploy needs only the file and the DVC remote. The companion files are then stale, so the deploy's fixture check will fail until `uv run python scripts/promote.py --refresh` can run, and the automatic restore puts the old image back. The manual edit is a last resort.
+`make rollback` writes `"action": "rollback"` into `champion.json`. When that lands on `main`, `deploy.yml` **restores** the most recent verified release of v<m> from the ledger (`s3://<bucket>/releases/`, ADR-0014). It is that image, re-activated through its own Lambda version when that version still runs the image, and it must report the recorded `release_id` and reproduce the predictions it served at tolerance 0. Nothing is rebuilt: an old model rebuilt with today's code, dependencies or holidays is a different release (measured 2026-09-24: v1 with one extra holiday changed 40 of the 80 fixture predictions, by up to 23.8 min).
+
+The deploy fails instead of rebuilding when:
+- no verified release of v<m> is recorded. It was never deployed after the ledger existed, or the deploy ran on the legacy role.
+- the recorded image has expired from ECR. Only the live release and its rollback target are pinned.
+- the role cannot read the ledger.
+
+In each case the run says which. If you accept a *new* release of that model, built from today's code, verified and recorded as new: `gh workflow run deploy.yml -f rebuild=true`. To restore one specific recorded release of the selected champion: `gh workflow run deploy.yml -f release_id=<id>`.
+
+Then watch `deploy.yml` and run the signed `deploy_check` exactly as in *Release*, with `--expect-version v<m>`. `make release-status BUCKET=<bucket>` shows the **selected** champion (`champion.json`) next to the **deployed** release (`releases/live.json`). They differ while a deploy is pending, or after one failed. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s, `"action": "rollback"`); the deploy needs only that file and the ledger. The manual edit is a last resort.
+
+## Release ledger (ADR-0014)
+
+- `releases/<release_id>.json` holds a verified release: its manifest (model, references, code, environment and config by hash), image digest, Lambda version, run URL, and the predictions it served on the 80-row grid, plus a history of every verification. It is written before traffic in alias mode. A release that cannot be recorded does not go live.
+- `releases/live.json` is the deployed release. It is written only after activation succeeded, so a failed deploy never moves it.
+- `/version` reports `release_id`. `monitor.yml` requires the service to report the release `live.json` names.
+- **Seeding (once, after the iam.sh migration):** nothing is recorded yet. Run one normal deploy of the current champion (`gh workflow run deploy.yml`). Until a model has a recorded release, a rollback to it fails loudly.
 
 ## Registry backup and restore
 

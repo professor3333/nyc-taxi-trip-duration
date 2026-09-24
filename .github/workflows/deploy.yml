@@ -19,6 +19,14 @@ name: deploy
 #            a failure restores the previous image. Requests can reach the
 #            new image before its checks finish; the smoke test above is what
 #            this mode relies on.
+# What is deployed (ADR-0014). A promotion builds a NEW release: the champion's
+# artefacts + today's code, content-addressed (release.json), verified, then
+# recorded in the S3 ledger with the predictions it served. A rollback
+# (champion.json action=rollback) RESTORES the most recent verified release
+# of that model - its image, its Lambda version - and must serve the recorded
+# predictions exactly; it never rebuilds an old model with new code. No
+# recorded release -> the run fails; `rebuild=true` builds a new release
+# deliberately. `release_id=<id>` restores a specific recorded release.
 # A model rollback is `make rollback REASON=...` + push (docs/runbook.md).
 
 on:
@@ -32,6 +40,14 @@ on:
     inputs:
       inject_failure:
         description: "Drill: fail after the checks pass, to prove the automatic restore"
+        type: boolean
+        default: false
+      release_id:
+        description: "Restore this recorded release (must be of the selected champion)"
+        type: string
+        default: ""
+      rebuild:
+        description: "Build a NEW release of the selected champion even if champion.json says rollback"
         type: boolean
         default: false
 
@@ -61,6 +77,9 @@ jobs:
       # Image pinning needs the ADR-0013 deploy role (ECR tag/preview grants);
       # on the legacy fallback role it is skipped with a warning.
       RETENTION: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
+      # The release ledger (s3://$BUCKET/releases/) needs the same role.
+      LEDGER: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
+      BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -89,8 +108,66 @@ jobs:
           echo "version=v$(jq -r .version models/champion.json)" >> "$GITHUB_OUTPUT"
           echo "sha=$(jq -r .git_sha models/champion.json)" >> "$GITHUB_OUTPUT"
 
+      # Build or restore. PLAN=restore when champion.json records a rollback
+      # (unless rebuild=true) or a release_id is dispatched: the recorded
+      # release's image is re-activated and must reproduce what it served.
+      - name: Plan - build a new release or restore a recorded one
+        env:
+          VERSION: ${{ steps.champ.outputs.version }}
+          INPUT_RELEASE_ID: ${{ inputs.release_id }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          ACTION=$(jq -r '.action // "promote"' models/champion.json)
+          echo "champion.json: $VERSION, action $ACTION"
+          if [ -z "$INPUT_RELEASE_ID" ] && { [ "$ACTION" != "rollback" ] || [ "$REBUILD" = "true" ]; }; then
+            echo "PLAN=build" >> "$GITHUB_ENV"
+            # Every check compares with the champion's fixture (1 min: it was
+            # computed where the model was promoted, possibly another arch).
+            echo "CHECK_ARGS=--expect-fixture models/champion_fixture.csv --models-dir build/champion/models --reference-dir build/champion/reference" >> "$GITHUB_ENV"
+            echo "### Plan: build a new release of $VERSION" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ "$LEDGER" = "true" ] || { echo "::error::a rollback restores a recorded release, and the ledger needs AWS_DEPLOY_ROLE_ARN (iam.sh migration). To build a NEW release of $VERSION with today's code instead: gh workflow run deploy.yml -f rebuild=true"; exit 1; }
+          RID="$INPUT_RELEASE_ID"
+          if [ -z "$RID" ]; then
+            RID=$(uv run python scripts/releases.py find --bucket "$BUCKET" --model "$VERSION") \
+              || { echo "::error::no verified release of $VERSION is recorded, so it cannot be restored. To build a NEW release of $VERSION with today's code (verified and recorded as new): gh workflow run deploy.yml -f rebuild=true"; exit 1; }
+          fi
+          uv run python scripts/releases.py get --bucket "$BUCKET" --release-id "$RID" --out build/restore > build-restore.env
+          # shellcheck disable=SC1091
+          . ./build-restore.env
+          test "$MODEL_VERSION" = "$VERSION" \
+            || { echo "::error::release $RID served $MODEL_VERSION, but the selected champion is $VERSION; roll the registry back first (make rollback)"; exit 1; }
+          DIGEST="${IMAGE_URI##*@}"
+          aws ecr describe-images --repository-name "$REPO" --image-ids imageDigest="$DIGEST" >/dev/null \
+            || { echo "::error::the image of release $RID ($DIGEST) is gone from ECR; rebuild=true builds a new release"; exit 1; }
+          jq '.manifest' build/restore/record.json > build/restore/release.json
+          {
+            echo "PLAN=restore"
+            echo "RELEASE_ID=$RELEASE_ID"
+            echo "IMAGE_URI=$IMAGE_URI"
+            echo "RESTORE_LAMBDA_VERSION=$LAMBDA_VERSION"
+            echo "RELEASE=$VERSION-restore-${RELEASE_ID:0:12}"
+            # Same image, same architecture: the predictions it served are
+            # reproduced exactly, or this is not the release that was verified.
+            echo "CHECK_ARGS=--expect-fixture build/restore/served_predictions.csv --fixture-tolerance 0"
+          } >> "$GITHUB_ENV"
+          {
+            echo "### Plan: restore recorded release of $VERSION (no rebuild)"
+            echo "- release: \`$RELEASE_ID\`"
+            echo "- image: \`$IMAGE_URI\`"
+            echo "- Lambda version: ${LAMBDA_VERSION:-none recorded}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Fetch champion artefacts from the DVC remote (S3)
-        run: uv run python scripts/fetch_champion.py
+        if: env.PLAN == 'build'
+        run: |
+          uv run python scripts/fetch_champion.py
+          # The release this build is: model, references, code, environment,
+          # config by content hash (ADR-0014). Baked in; /version reports it.
+          RELEASE_ID=$(uv run python scripts/release_manifest.py --commit "$GITHUB_SHA")
+          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          echo "release id: $RELEASE_ID"
 
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
@@ -114,6 +191,7 @@ jobs:
           fi
 
       - name: Build and push image
+        if: env.PLAN == 'build'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           REPO: ${{ secrets.ECR_REPOSITORY }}
@@ -141,12 +219,17 @@ jobs:
             echo "- tag: \`$RELEASE\` (immutable)"
             echo "- digest: \`$DIGEST\`"
             echo "- model: \`${{ steps.champ.outputs.version }}\` trained at \`${{ steps.champ.outputs.sha }}\`"
+            echo "- release id: \`$RELEASE_ID\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Same gate as CI, on the exact bytes that would run: CRITICAL/HIGH with
       # a fix fails the release before Lambda changes. (ECR scan-on-push also
       # runs, but only reports.)
+      # A restore re-activates an image that passed this gate when it was
+      # built; blocking a rollback on a CVE published since would keep the
+      # broken release live instead. Reported in the plan, not re-gated.
       - name: Vulnerability scan of the release image (trivy)
+        if: env.PLAN == 'build'
         run: |
           docker pull -q "$IMAGE_URI" >/dev/null
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
@@ -165,10 +248,10 @@ jobs:
             docker logs release-smoke 2>&1 | grep -q "Application startup complete" && break
             sleep 1
           done
+          read -ra CHECK <<<"$CHECK_ARGS"
           if ! uv run python scripts/deploy_check.py --url http://localhost:8080 \
               --expect-version ${{ steps.champ.outputs.version }} \
-              --expect-fixture models/champion_fixture.csv \
-              --models-dir build/champion/models --reference-dir build/champion/reference \
+              --expect-release "$RELEASE_ID" "${CHECK[@]}" \
               --malformed; then
             docker logs release-smoke 2>&1 | tail -40
             exit 1
@@ -241,11 +324,21 @@ jobs:
       - name: Publish a candidate version (no traffic)
         if: env.RELEASE_MODE == 'alias'
         run: |
-          aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
-          aws lambda wait function-updated-v2 --function-name "$FN"
-          CANDIDATE=$(aws lambda publish-version --function-name "$FN" \
-            --description "$RELEASE" --query Version --output text)
-          aws lambda wait function-active-v2 --function-name "$FN:$CANDIDATE"
+          CANDIDATE=""
+          if [ -n "${RESTORE_LAMBDA_VERSION:-}" ]; then
+            # A restore re-activates the recorded version itself when it still
+            # runs the recorded image; otherwise a version is published from it.
+            HAS=$(aws lambda get-function --function-name "$FN" --qualifier "$RESTORE_LAMBDA_VERSION" \
+              --query Code.ResolvedImageUri --output text 2>/dev/null || true)
+            if [ "$HAS" = "$IMAGE_URI" ]; then CANDIDATE=$RESTORE_LAMBDA_VERSION; fi
+          fi
+          if [ -z "$CANDIDATE" ]; then
+            aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
+            aws lambda wait function-updated-v2 --function-name "$FN"
+            CANDIDATE=$(aws lambda publish-version --function-name "$FN" \
+              --description "$RELEASE" --query Version --output text)
+            aws lambda wait function-active-v2 --function-name "$FN:$CANDIDATE"
+          fi
           RESOLVED=$(aws lambda get-function --function-name "$FN" --qualifier "$CANDIDATE" \
             --query Code.ResolvedImageUri --output text)
           echo "candidate version $CANDIDATE runs $RESOLVED"
@@ -270,12 +363,29 @@ jobs:
           else
             echo "::notice::image unchanged; no new execution environment, cold start not measured"
           fi
+          read -ra CHECK <<<"$CHECK_ARGS"
           uv run python scripts/deploy_check.py --invoke "$TARGET" \
             "${COLD_ARGS[@]}" \
             --expect-version ${{ steps.champ.outputs.version }} \
-            --expect-fixture models/champion_fixture.csv \
-            --models-dir build/champion/models --reference-dir build/champion/reference \
+            --expect-release "$RELEASE_ID" "${CHECK[@]}" \
+            --record-predictions build/served_predictions.csv \
             --malformed
+
+      # The evidence is complete before any traffic in alias mode (and before
+      # the URL check in latest mode): this release, this image, this version,
+      # these served predictions. A release that cannot be recorded cannot be
+      # rolled back to, so it does not go live: a failure here fails the run.
+      - name: Record the verified release in the ledger
+        if: env.LEDGER == 'true'
+        run: |
+          MANIFEST=build/champion/models/release.json
+          if [ "$PLAN" = "restore" ]; then MANIFEST=build/restore/release.json; fi
+          uv run python scripts/releases.py put --bucket "$BUCKET" \
+            --manifest "$MANIFEST" --image "$IMAGE_URI" \
+            --model ${{ steps.champ.outputs.version }} \
+            --evidence build/served_predictions.csv \
+            --lambda-version "${CANDIDATE:-}" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Keep the cold-start evidence
         if: always() && env.COLD == 'true'
@@ -309,10 +419,10 @@ jobs:
           if [ "$RELEASE_MODE" = "alias" ]; then QUALIFIER=(--qualifier live); fi
           URL=$(aws lambda get-function-url-config --function-name "$FN" "${QUALIFIER[@]}" \
             --query FunctionUrl --output text)
+          read -ra CHECK <<<"$CHECK_ARGS"
           uv run python scripts/deploy_check.py --url "$URL" --sigv4 \
             --expect-version ${{ steps.champ.outputs.version }} \
-            --expect-fixture models/champion_fixture.csv \
-            --models-dir build/champion/models --reference-dir build/champion/reference \
+            --expect-release "$RELEASE_ID" "${CHECK[@]}" \
             --malformed
 
       - name: Drill - injected failure
@@ -330,6 +440,22 @@ jobs:
         run: |
           uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact \
             --digest "$IMAGE_URI" --digest "$LIVE_IMAGE"
+
+      # The *deployed* release, as opposed to the *selected* champion
+      # (champion.json): written only now that activation succeeded, so a
+      # failed deploy leaves it naming what still serves. `make release-status`
+      # and monitor.yml compare the two.
+      - name: Mark the release live
+        if: env.LEDGER == 'true'
+        continue-on-error: true
+        run: |
+          uv run python scripts/releases.py mark-live --bucket "$BUCKET" --release-id "$RELEASE_ID" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Ledger skipped (legacy role)
+        if: env.LEDGER != 'true'
+        run: |
+          echo "::warning::release $RELEASE_ID verified but NOT recorded (legacy AWS role): it cannot be restored by a later rollback. Run the iam.sh migration."
 
       # Automatic recovery: the image that was serving before this run goes
       # back, and must be the one running and healthy afterwards. The run

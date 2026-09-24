@@ -349,6 +349,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             model_kind=p.kind,
             fallback_version=p.fallback_version,
             champion_version=p.champion_version,
+            release_id=p.release_id,
             git_sha=p.git_sha,
             train_months=list(p.meta.get("train_months", [])),
             feature_count=len(p.meta.get("feature_columns", [])),
