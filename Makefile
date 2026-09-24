@@ -1,4 +1,4 @@
-.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-api compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env
+.PHONY: setup lint-infra audit lint format test test-all ingest ingest-zones verify-raw quality pipeline pipeline-smoke reproduce compose-up compose-api compose-down mlflow-ui register promote promote-recover promote-abort cost registry-backup registry-restore-check rollback candidate-ci registry-status serve docker-build docker-build-champion docker-run lambda-drill train-env live-accuracy
 
 setup:        ## Install the locked environment, including dev and train (dvc, mlflow) tools
 	uv sync --frozen --group train
@@ -78,6 +78,12 @@ registry-backup: ## Dump the local registry (Postgres + artifacts + manifest) to
 
 registry-restore-check: ## Restore FROM=<dir|s3://...> into a scratch project and verify it: make registry-restore-check FROM=...
 	uv run python scripts/registry_restore.py --from "$(FROM)" --check
+
+live-accuracy: ## Live service vs offline champion vs recorded MAE on real trips: make live-accuracy [MONTH=YYYY-MM]
+	uv run python scripts/fetch_champion.py
+	uv run python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) sample
+	TRAIN_ENV_NETWORK=none scripts/train_env.sh uv run --locked python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) offline
+	uv run python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) live --invoke $${LAMBDA_FUNCTION_NAME:-nyc-taxi-trip-duration}
 
 promote-recover: ## Finish an interrupted promote/rollback/refresh (see docs/runbook.md)
 	uv run python scripts/promote.py --recover

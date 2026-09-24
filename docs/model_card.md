@@ -1,6 +1,8 @@
 # Model card — nyc-taxi-trip-duration champion
 
-**Champion:** registry version 3, promoted 2026-09-22 (`docs/promotions.md`).
+**Champion:** registry version 1, restored 2026-09-23 by the runbook's
+rollback verification (#72); v3 was champion 2026-09-22 → 2026-09-23. See
+`docs/promotions.md`; `/health` reports the serving version.
 
 ## Intended use
 
@@ -37,6 +39,25 @@ guarantee. Zones 264 (Unknown) and 265 (Outside NYC) are refused.
 MAPE is 31–35 % and dominated by short trips; MAE is the primary metric
 (ADR-0001). Per-hour and per-borough-pair MAE tables: `reports/eval/`.
 
+## Deployed accuracy (live, real trips)
+
+The numbers above are offline. `make live-accuracy` checks that the deployed
+service achieves them. It draws a seeded sample of 5,000 real trips from the
+champion's test month, sends them through the live `/predict/batch`, and
+compares the answers with the champion's offline predictions, computed on
+x86_64 in the canonical training image, and with the recorded MAE
+(`scripts/live_accuracy.py`).
+
+| checked | version | month | path | parity | live MAE [95% CI] | recorded MAE |
+|---|---|---|---|---|---|---|
+| 2026-09-24 | v1 | 2024-12 | Function URL (SigV4) | 5,000 / 5,000 identical | 4.702 [4.541, 4.863] | 4.689 |
+
+Evidence: `reports/live_accuracy/2024-12-v1.json` (and the same result
+through the Lambda invoke path). This shows the deployment reproduces the
+offline model on real inputs. It does not show accuracy on today's traffic:
+the newest month any number here was measured on is TLC's newest published
+month, not September 2026.
+
 ## Known failure modes and limits
 
 - **Unseen zone pairs:** the model generalises through coordinates; the
@@ -64,7 +85,9 @@ features they serve with.
 
 ## Champion selection and rollback
 
-ADR-0007: a challenger is promoted only if it beats the champion's MAE on the
-same month (or the champion's prospective MAE on the challenger's test month)
-and beats the fallback. `make promote` / `make rollback`; every change is a
+ADR-0007: on the same month (the challenger's test month, where the champion's
+number is its prospective evaluation), a challenger must beat the fallback and
+be at least 1% better than the champion, with a 95% day-block bootstrap
+interval above zero, and no gated slice (period, airport, borough pair, busy
+route) may be more than 3% worse (2026-09-24 amendment). `make promote` / `make rollback`; every change is a
 row in `docs/promotions.md`; the deployed version is visible on `/health`.
