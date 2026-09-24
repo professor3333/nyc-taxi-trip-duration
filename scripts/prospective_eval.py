@@ -10,7 +10,8 @@ reports/monitoring/YYYY-MM.json with MAE/MAPE/RMSE/P90 plus the ADR-0011
 verdict: `degraded` when MAE exceeds the promotion-time test MAE by more than
 `monitoring.mae_degradation_ratio`, or when the model loses to the fallback.
 Exit 0 always (the verdict is data; retrain.yml turns it into an issue), 2 if
-the champion has already seen the month.
+the champion has already seen the month. Also writes
+reports/monitoring/YYYY-MM-slices.csv (slices.slice_table) for the gate.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from tripduration.features import (
     ReferenceData,
     build_features,
 )
+from tripduration.slices import slice_table
 from tripduration.validate import PICKUP
 
 
@@ -117,6 +119,11 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / f"{args.month}.json").write_text(
         json.dumps(report, indent=2) + "\n"
+    )
+    # Same table evaluate.py writes for a candidate: the gate compares them
+    # slice by slice and day by day (gate.py).
+    slice_table(frame, ref, {"model": pred_model, "fallback": pred_fb}).to_csv(
+        args.out_dir / f"{args.month}-slices.csv", index=False
     )
     print(
         f"{args.month}: champion v{champ['version']} MAE {m_model['mae']:.3f} "

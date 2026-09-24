@@ -11,7 +11,17 @@ Comparing a candidate's test MAE with a champion's MAE from a different month
 compares traffic, not models, so a missing prospective evaluation is a fail,
 not a pass.
 
+On top of the aggregate comparison (``registry.promotion_gate``) it applies
+the safeguards in ``gate.py`` to the candidate's ``reports/eval/test_slices.csv``
+and the champion's ``reports/monitoring/<month>-slices.csv``: a minimum
+worthwhile improvement whose day-block bootstrap interval excludes zero, and
+no gated slice (period, airport, borough pair, busy route) worse by more than
+the policy allows. A missing slice table is a fail, like a missing
+prospective evaluation.
+
 Writes ``reports/monitoring/gate-<month>.json`` and prints a short verdict.
+The report carries the candidate's ``model_md5`` (from ``dvc.lock``), which is
+how ``promote.py`` later ties a registered version to this verdict.
 Always exits 0: the verdict is data for the candidate PR, and CI never
 registers or promotes (ADR-0010). A human reads it and runs
 ``make register`` / ``make promote``.
@@ -26,7 +36,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tripduration.registry import promotion_gate
+import pandas as pd
+
+from tripduration.config import load_params
+from tripduration.gate import MismatchedEvaluationError, PromotionPolicy, assess
+from tripduration.registry import dvc_lock_md5s, promotion_gate
 
 
 def main() -> int:
@@ -35,7 +49,13 @@ def main() -> int:
     ap.add_argument("--metrics", type=Path, default=Path("metrics/eval.json"))
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
     ap.add_argument("--monitoring-dir", type=Path, default=Path("reports/monitoring"))
+    ap.add_argument(
+        "--candidate-slices", type=Path, default=Path("reports/eval/test_slices.csv")
+    )
+    ap.add_argument("--params", type=Path, default=Path("params.yaml"))
+    ap.add_argument("--dvc-lock", type=Path, default=Path("dvc.lock"))
     args = ap.parse_args()
+    policy = PromotionPolicy.from_params(load_params(args.params).raw)
 
     ev = json.loads(args.metrics.read_text())
     champ = json.loads(args.champion.read_text())
@@ -63,16 +83,40 @@ def main() -> int:
         if int(rep.get("champion_version", -1)) == int(champ["version"]):
             prospective = float(rep["model"]["mae"])
 
-    gate = promotion_gate(challenger, champion, prospective)
+    gate = promotion_gate(
+        challenger, champion, prospective, policy.min_relative_improvement
+    )
+    reasons = list(gate.reasons)
+
+    champ_slices = args.monitoring_dir / f"{args.month}-slices.csv"
+    safeguards: dict[str, Any] | None = None
+    if prospective is None:
+        pass  # already a fail: nothing to compare slices against
+    elif not args.candidate_slices.exists() or not champ_slices.exists():
+        missing = [
+            str(p) for p in (args.candidate_slices, champ_slices) if not p.exists()
+        ]
+        reasons.append(f"no slice comparison: missing {', '.join(missing)}")
+    else:
+        try:
+            more, safeguards = assess(
+                pd.read_csv(args.candidate_slices), pd.read_csv(champ_slices), policy
+            )
+            reasons += more
+        except MismatchedEvaluationError as e:
+            reasons.append(str(e))
+
+    lock = dvc_lock_md5s(args.dvc_lock) if args.dvc_lock.exists() else {}
     report: dict[str, Any] = {
         "month": args.month,
-        "verdict": "pass" if gate.passed else "fail",
-        "reasons": list(gate.reasons),
+        "verdict": "fail" if reasons else "pass",
+        "reasons": reasons,
         "candidate": {
             "mae_test_model": ev["test"]["model"]["mae"],
             "mae_test_fallback": ev["test"]["fallback"]["mae"],
             "train_months": ev["train_months"],
             "git_sha": ev["git_sha"],
+            "model_md5": lock.get("models/model.pkl"),
         },
         "champion": {
             "version": champ["version"],
@@ -80,6 +124,7 @@ def main() -> int:
             "promotion_test_month": champ["test_month"],
             "mae_prospective_on_month": prospective,
         },
+        "safeguards": safeguards,
         "decided_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     args.monitoring_dir.mkdir(parents=True, exist_ok=True)
@@ -97,9 +142,17 @@ def main() -> int:
         f"{args.month}: candidate MAE {ev['test']['model']['mae']:.4f} "
         f"(fallback {ev['test']['fallback']['mae']:.4f}) vs {basis} -> {verdict}"
     )
-    for reason in gate.reasons:
+    if safeguards:
+        imp = safeguards["improvement"]
+        print(
+            f"  improvement {imp['point']:+.2%} "
+            f"[{imp['lower']:+.2%}, {imp['upper']:+.2%}] over {imp['days']} days; "
+            f"{safeguards['slices_regressed']}/{safeguards['slices_checked']} "
+            "gated slices regressed"
+        )
+    for reason in reasons:
         print(f"  - {reason}")
-    if gate.passed:
+    if not reasons:
         print("  promote with: make register && make promote VERSION=<n> REASON=...")
     else:
         print("  the champion stays in production; nothing is registered or promoted")

@@ -49,6 +49,43 @@ def _prospective(tmp_path: Path, *, month: str, mae: float, version: int = 3) ->
     return d
 
 
+def _slices(
+    tmp_path: Path, month: str, *, cand_noise: float, champ_noise: float = 1.0
+) -> None:
+    """Slice tables for the candidate and the champion on the same trips."""
+    import numpy as np
+    import pandas as pd
+
+    from tripduration.features import DEPARTURE, DO, PU, TARGET, ReferenceData
+    from tripduration.slices import slice_table
+
+    ref = ReferenceData.load(
+        ROOT / "tests" / "fixtures" / "zone_centroids.csv",
+        ROOT / "configs" / "holidays.csv",
+    )
+    rng = np.random.default_rng(0)
+    n = 20_000
+    frame = pd.DataFrame(
+        {
+            PU: rng.choice([132, 161, 236, 79], n),
+            DO: rng.choice([161, 230, 87, 68], n),
+            DEPARTURE: pd.to_datetime(f"{month}-01")
+            + pd.to_timedelta(rng.integers(0, 28 * 1440, n), "min"),
+            TARGET: rng.gamma(2.0, 6.0, n),
+        }
+    )
+    y = frame[TARGET].to_numpy()
+    noise = rng.normal(0, 3, n)
+    (tmp_path / "eval").mkdir(exist_ok=True)
+    (tmp_path / "monitoring").mkdir(exist_ok=True)
+    slice_table(frame, ref, {"model": y + cand_noise * noise}).to_csv(
+        tmp_path / "eval" / "test_slices.csv", index=False
+    )
+    slice_table(frame, ref, {"model": y + champ_noise * noise}).to_csv(
+        tmp_path / "monitoring" / f"{month}-slices.csv", index=False
+    )
+
+
 def _run(metrics: Path, champion: Path, monitoring: Path, month: str) -> dict[str, Any]:
     out = subprocess.run(
         [
@@ -62,6 +99,10 @@ def _run(metrics: Path, champion: Path, monitoring: Path, month: str) -> dict[st
             str(champion),
             "--monitoring-dir",
             str(monitoring),
+            "--candidate-slices",
+            str(metrics.parent.parent / "eval" / "test_slices.csv"),
+            "--dvc-lock",
+            str(metrics.parent.parent / "dvc.lock"),
         ],
         capture_output=True,
         text=True,
@@ -79,9 +120,31 @@ def test_candidate_beating_the_champion_on_the_same_month_passes(
     m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-02")
     c = _champion(tmp_path, mae=3.79, month="2025-01")
     d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    _slices(tmp_path, "2025-02", cand_noise=0.9)
     r = _run(m, c, d, "2025-02")
     assert r["verdict"] == "pass" and r["reasons"] == []
+    assert r["safeguards"]["improvement"]["lower"] > 0
     assert "make register" in r["_stdout"]
+
+
+def test_missing_slice_tables_are_a_fail(tmp_path: Path) -> None:
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-02")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    r = _run(m, c, d, "2025-02")
+    assert r["verdict"] == "fail"
+    assert "no slice comparison" in r["reasons"][0]
+
+
+def test_a_gain_too_small_to_matter_fails(tmp_path: Path) -> None:
+    """Lower MAE is no longer enough: the old rule passed this candidate."""
+    m = _write(tmp_path, cand=3.61, fb=4.00, month="2025-02")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    _slices(tmp_path, "2025-02", cand_noise=0.998)
+    r = _run(m, c, d, "2025-02")
+    assert r["verdict"] == "fail"
+    assert any("minimum worth a release" in x for x in r["reasons"])
 
 
 def test_candidate_losing_to_the_champion_fails(tmp_path: Path) -> None:

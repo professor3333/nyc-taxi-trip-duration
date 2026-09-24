@@ -329,11 +329,14 @@ def promotion_gate(
     challenger: dict[str, str],
     champion: dict[str, str] | None,
     champion_prospective_mae: float | None = None,
+    min_relative_improvement: float = 0.0,
 ) -> Gate:
     """ADR-0007: lower MAE than the champion on the *same* month, beats fallback.
 
     When the test months differ, the champion's number for the challenger's
-    test month is its prospective evaluation, if one exists.
+    test month is its prospective evaluation, if one exists. "Lower" means at
+    least ``min_relative_improvement`` lower (0.01 = 1%); the slice and
+    bootstrap safeguards are ``gate.assess``, recorded in the gate report.
     """
     reasons: list[str] = []
     c_model = float(challenger["mae_test_model"])
@@ -359,7 +362,38 @@ def promotion_gate(
             reasons.append(
                 f"challenger MAE {c_model:.4f} not below {basis} {k_model:.4f}"
             )
+        elif 1.0 - c_model / k_model < min_relative_improvement:
+            reasons.append(
+                f"challenger MAE {c_model:.4f} is only {1.0 - c_model / k_model:.2%} "
+                f"below {basis} {k_model:.4f}; the minimum worth a release is "
+                f"{min_relative_improvement:.1%}"
+            )
     return Gate(passed=not reasons, reasons=tuple(reasons))
+
+
+def gate_report_reasons(
+    challenger: dict[str, str], monitoring_dir: Path = Path("reports/monitoring")
+) -> list[str]:
+    """Why the recorded gate verdict does not cover this version (empty = it does).
+
+    ``scripts/gate_candidate.py`` applies the slice and bootstrap safeguards
+    and records the candidate's ``model_md5``; promotion accepts that verdict
+    only for the exact bytes it judged.
+    """
+    month = challenger["test_month"]
+    path = monitoring_dir / f"gate-{month}.json"
+    if not path.exists():
+        return [f"no gate report {path} (scripts/gate_candidate.py --month {month})"]
+    rep = json.loads(path.read_text())
+    judged = rep.get("candidate", {}).get("model_md5")
+    if judged != challenger["model_md5"]:
+        return [
+            f"{path} judged model md5 {judged}, not this version's "
+            f"{challenger['model_md5']}"
+        ]
+    if rep.get("verdict") != "pass":
+        return [f"{path} verdict is {rep.get('verdict')}: " + "; ".join(rep["reasons"])]
+    return []
 
 
 def _log_header() -> str:
@@ -732,6 +766,7 @@ def promote(
     model_name: str = MODEL_NAME,
     files: ReleaseFiles | None = None,
     monitoring_dir: Path = Path("reports/monitoring"),
+    params_path: Path = Path("params.yaml"),
 ) -> ChampionState:
     files = files or ReleaseFiles()
     mlflow.set_tracking_uri(tracking_uri)
@@ -746,11 +781,17 @@ def promote(
         if current and champ and champ["test_month"] != chal["test_month"]
         else None
     )
-    gate = promotion_gate(chal, champ, prospective)
-    if not gate.passed and not force:
-        raise RegistryError("promotion gate failed: " + "; ".join(gate.reasons))
-    if not gate.passed:
-        reason = f"FORCED ({'; '.join(gate.reasons)}): {reason}"
+    policy = yaml.safe_load(params_path.read_text())["promotion"]
+    gate = promotion_gate(
+        chal, champ, prospective, float(policy["min_relative_improvement"])
+    )
+    failed = list(gate.reasons)
+    if champ is not None:  # a first promotion has nothing to be compared with
+        failed += gate_report_reasons(chal, monitoring_dir)
+    if failed and not force:
+        raise RegistryError("promotion gate failed: " + "; ".join(failed))
+    if failed:
+        reason = f"FORCED ({'; '.join(failed)}): {reason}"
 
     before = _alias_state(client, model_name)
     after = {

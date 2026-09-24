@@ -30,6 +30,7 @@ from tripduration.features import (
     ReferenceData,
     build_features,
 )
+from tripduration.slices import slice_table
 from tripduration.train import FALLBACK_FILE, META_FILE, MODEL_FILE
 
 log = logging.getLogger(__name__)
@@ -183,6 +184,11 @@ def run(
         )
         top_routes(frame, preds).to_csv(
             reports_dir / f"{split}_mae_by_route.csv", index=False
+        )
+        # The promotion gate compares this, slice by slice and day by day,
+        # with the champion's table for the same month (gate.py).
+        slice_table(frame, ref, preds).to_csv(
+            reports_dir / f"{split}_slices.csv", index=False
         )
         log.info(
             "%s (%s): MAE model=%.3f fallback=%.3f  P90 model=%.2f fallback=%.2f",

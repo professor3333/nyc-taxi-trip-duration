@@ -125,3 +125,66 @@ command has finished and the owner commits.
   and tags, **not** the ability to deploy or roll back, because
   `champion.json` + git + the DVC remote are sufficient. Re-registering from
   the commits recorded in `docs/promotions.md` rebuilds it.
+
+## Amendment (2026-09-24): a gain must be worth a release, everywhere that matters
+
+**Problem.** Gate (2) passed any strictly lower MAE: a candidate 0.001 min
+better was promotable, and so was one better on average but worse on airport
+runs or the evening peak. The aggregate hides where the error moved.
+
+**Decision.** On the month both models are scored on (the candidate's test
+month and the champion's prospective evaluation of it), promotion needs all of:
+
+4. **A minimum worthwhile improvement:** candidate MAE at least
+   `promotion.min_relative_improvement` = **1%** below the champion's. A
+   release is not free (a new artefact, a cold start, a deploy that can fail);
+   below 1% (about 2 s per trip at today's MAE) the difference is smaller than
+   the month-to-month movement of either model and not worth that risk.
+5. **An improvement that survives resampling:** the 95% day-block bootstrap
+   interval of the relative improvement (2,000 resamples, seed from
+   `params.yaml`) must lie above zero. Days, not trips, are resampled: trips
+   on one day share weather, events and incidents, so ~3.8M trips are about 30
+   independent observations, not 3.8M.
+6. **No important slice materially worse:** for every slice with at least
+   `slice_min_n` = 2,000 trips in the families `period` (weekday vs
+   weekend/holiday × the five hour buckets), `airport` (from/to JFK, LGA,
+   EWR), `borough_pair` and `route` (the 25 busiest zone pairs of that month),
+   candidate MAE ≤ champion MAE × (1 + `slice_max_regression` = **3%**).
+   Smaller slices are reported, not gated: below ~2,000 trips a 3% difference
+   is within noise.
+
+Slices are defined in `src/tripduration/slices.py` as pure functions of the
+request fields and static reference data, so a slice means the same thing
+for every model and month. `evaluate` writes `reports/eval/test_slices.csv`,
+`prospective_eval.py` writes `reports/monitoring/<month>-slices.csv`, and
+`gate_candidate.py` compares them (`gate.py`). It refuses to compare tables
+whose per-day or per-slice counts differ, because that means they were not
+scored on the same trips.
+
+**Binding the verdict to the bytes.** The gate report
+(`reports/monitoring/gate-<month>.json`) records the candidate's `model_md5`
+from `dvc.lock`. `promote.py` now refuses a non-first promotion unless that
+report exists, says `pass`, and judged this version's `model_md5`. It also
+re-applies (4) to the registry tags. `--force` still bypasses the gate, and
+the failed reasons are written into the `FORCED (...)` row.
+
+**Calibration on real data (2026-09-24).** The retrain candidate for 2025-04
+(trained 2024-10..2025-02) was compared with v3 (trained 2024-10..2024-11),
+both scored on all 3,805,957 valid 2025-04 trips. The improvement was +4.30%,
+95% interval [+3.31%, +5.24%] over 30 days. None of the 55 gated slices got
+worse by more than 3%; the worst was Queens→Bronx at +0.1%. That candidate
+passes the new gate as it passed the old one. The rule is written to stop the
+cases the old one let through, and it does not block a clear gain. Tests:
+`tests/test_gate.py` (a better average that hurts JFK pickups by 15% fails;
+equal models fail; tables from different trips are refused),
+`tests/test_gate_candidate.py`, `tests/test_registry.py` (a report for other
+bytes, a failing report, a missing report, and a 0.2% gain are each refused).
+
+**Consequences.**
+- The existing `gate-2025-03.json` / `gate-2025-04.json` predate this and
+  carry no `model_md5`. Promoting either candidate needs `gate_candidate.py`
+  re-run on outputs from the current `evaluate` (the next retrain produces
+  them), or `--force` with a reason.
+- A candidate can now fail while being better on average. That is intended.
+  The PR body shows which slice failed, and the owner either declines the
+  model (`model-rejected`) or forces it with that reason on record.

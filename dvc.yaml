@@ -115,6 +115,7 @@ stages:
       - uv.lock
       - .python-version
       - src/tripduration/evaluate.py
+      - src/tripduration/slices.py
       - src/tripduration/fallback.py
       - src/tripduration/features.py
       - src/tripduration/config.py
