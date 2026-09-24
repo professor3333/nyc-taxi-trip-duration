@@ -183,7 +183,7 @@ def test_deploy_pins_serving_and_candidate_images_before_lambda_changes() -> Non
     names = _steps(job)
     steps = job["steps"]
     record = names.index("Record the serving image and its pins")
-    push = names.index("Build and push image")
+    push = names.index("Build and push image (or reuse the release's existing image)")
     pin = names.index("Pin the serving image and the candidate; verify retention")
     first_change = min(
         i
@@ -223,7 +223,7 @@ def test_rollback_restores_a_recorded_release_and_never_silently_rebuilds() -> N
     # every building step is skipped on a restore
     for name in (
         "Fetch champion artefacts from the DVC remote (S3)",
-        "Build and push image",
+        "Build and push image (or reuse the release's existing image)",
         "Vulnerability scan of the release image (trivy)",
     ):
         assert steps[names.index(name)]["if"] == "env.PLAN == 'build'", name
