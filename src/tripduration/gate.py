@@ -37,6 +37,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from tripduration.slices import AIRPORTS
+
 
 @dataclass(frozen=True)
 class PromotionPolicy:
@@ -95,7 +97,7 @@ class InvalidEvidenceError(EvidenceError):
 # Families in which every evaluated trip has exactly one label.
 COVERING_FAMILIES = ("period", "borough_pair", "day")
 # Airport zones as they appear in route labels ("pu->do") and borough pairs.
-_AIRPORT_ZONES = frozenset({"1", "132", "138"})
+_AIRPORT_ZONES = frozenset(str(z) for z in AIRPORTS)
 
 
 def _problems(t: pd.DataFrame, col: str, policy: PromotionPolicy) -> list[str]:
