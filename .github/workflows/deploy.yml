@@ -50,6 +50,10 @@ on:
         description: "Build a NEW release of the selected champion even if champion.json says rollback"
         type: boolean
         default: false
+      fresh_build:
+        description: "Build a new image even if this release's image exists (run-unique tag)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy
@@ -190,35 +194,55 @@ jobs:
             echo "::warning::ECR retention pins skipped: legacy AWS role (run iam.sh + ecr.sh, docs/runbook.md). The serving image is protected only while it is among the newest 5."
           fi
 
-      - name: Build and push image
+      # Tagged by CONTENT: <model version>-<release id>. The repository is
+      # IMMUTABLE, so a retry of the same commit used to rebuild, get another
+      # digest (builds are not bit-reproducible) and be refused on push. Now
+      # a retry - or any commit with the same release content - finds the tag
+      # and reuses that image, after checking its release.id label. A
+      # deliberately new build (fresh_build=true) gets a run-unique tag.
+      - name: Build and push image (or reuse the release's existing image)
         if: env.PLAN == 'build'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY }}
+          VERSION: ${{ steps.champ.outputs.version }}
+          TRAINED_AT: ${{ steps.champ.outputs.sha }}
+          FRESH_BUILD: ${{ inputs.fresh_build }}
         run: |
           IMAGE="$REGISTRY/$REPO"
-          # The repository is IMMUTABLE, so every tag must be unique: the
-          # release is <model version>-<commit>, never a bare vN that could
-          # later point somewhere else.
-          RELEASE="${{ steps.champ.outputs.version }}-${{ github.sha }}"
-          # Lambda rejects OCI manifests, so buildx must emit Docker v2 media
-          # types: --provenance=false --sbom=false + oci-mediatypes=false.
-          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-            --output type=image,oci-mediatypes=false,push=true \
-            --build-arg MODELS_SRC=build/champion/models \
-            --build-arg REFERENCE_SRC=build/champion/reference \
-            --build-arg GIT_SHA=${{ github.sha }} \
-            --build-arg MODEL_VERSION=${{ steps.champ.outputs.version }} \
-            -t "$IMAGE:$RELEASE" .
-          DIGEST=$(aws ecr describe-images --repository-name "$REPO" \
-            --image-ids imageTag="$RELEASE" --query 'imageDetails[0].imageDigest' --output text)
+          RELEASE="$VERSION-${RELEASE_ID:0:16}"
+          if [ "$FRESH_BUILD" = "true" ]; then RELEASE="$RELEASE-run$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"; fi
+          if FOUND=$(aws ecr describe-images --repository-name "$REPO" --image-ids imageTag="$RELEASE" \
+              --query 'imageDetails[0].imageDigest' --output text 2>&1); then
+            DIGEST="$FOUND"
+            docker pull -q "$IMAGE@$DIGEST" >/dev/null
+            LABEL=$(docker inspect --format '{{ index .Config.Labels "release.id" }}' "$IMAGE@$DIGEST")
+            test "$LABEL" = "$RELEASE_ID" \
+              || { echo "::error::tag $RELEASE exists but its image is release '$LABEL', not $RELEASE_ID"; exit 1; }
+            HOW="reused (already built for this release)"
+          elif grep -q ImageNotFoundException <<<"$FOUND"; then
+            # Lambda rejects OCI manifests, so buildx must emit Docker v2 media
+            # types: --provenance=false --sbom=false + oci-mediatypes=false.
+            docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+              --output type=image,oci-mediatypes=false,push=true \
+              --build-arg MODELS_SRC=build/champion/models \
+              --build-arg REFERENCE_SRC=build/champion/reference \
+              --build-arg GIT_SHA="$GITHUB_SHA" \
+              --build-arg MODEL_VERSION="$VERSION" \
+              --build-arg RELEASE_ID="$RELEASE_ID" \
+              -t "$IMAGE:$RELEASE" .
+            DIGEST=$(aws ecr describe-images --repository-name "$REPO" \
+              --image-ids imageTag="$RELEASE" --query 'imageDetails[0].imageDigest' --output text)
+            HOW="built and pushed"
+          else
+            echo "::error::cannot look up $RELEASE in ECR: $FOUND"; exit 1
+          fi
           echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
           echo "IMAGE_URI=$IMAGE@$DIGEST" >> "$GITHUB_ENV"
           {
-            echo "### Release image"
+            echo "### Release image ($HOW)"
             echo "- tag: \`$RELEASE\` (immutable)"
             echo "- digest: \`$DIGEST\`"
-            echo "- model: \`${{ steps.champ.outputs.version }}\` trained at \`${{ steps.champ.outputs.sha }}\`"
+            echo "- model: \`$VERSION\` trained at \`$TRAINED_AT\`"
             echo "- release id: \`$RELEASE_ID\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

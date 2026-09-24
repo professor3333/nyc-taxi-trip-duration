@@ -63,8 +63,11 @@ ARG MODELS_SRC
 ARG REFERENCE_SRC
 ARG GIT_SHA=unknown
 ARG MODEL_VERSION=unknown
+# The release this image is (release.json, ADR-0014). deploy.yml reads the
+# label to prove an existing image is the release before reusing it.
+ARG RELEASE_ID=none
 LABEL org.opencontainers.image.source="https://github.com/professor3333/nyc-taxi-trip-duration" \
-      git.sha="${GIT_SHA}" model.version="${MODEL_VERSION}"
+      git.sha="${GIT_SHA}" model.version="${MODEL_VERSION}" release.id="${RELEASE_ID}"
 
 COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 

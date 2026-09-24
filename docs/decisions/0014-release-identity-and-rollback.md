@@ -102,6 +102,38 @@ verified.
   `tests/test_iam.py` (deploy writes only `releases/*`; monitor reads only
   `releases/live.json`).
 
+## Amendment, 2026-09-24 — images are tagged by release, and retries reuse them
+
+**Finding (external audit).** Release images were tagged
+`<model version>-<git sha>` in an IMMUTABLE repository. A retry of the same
+commit rebuilt the image, and builds are not bit-reproducible, so it got a
+different digest. ECR then refused the push to the existing tag, which made
+recovery from any failure after the first push fragile.
+
+**Decision.** The tag is `<model version>-<release id, 16 hex>`, and the image
+carries the label `release.id`. Before building, `deploy.yml` looks the tag
+up:
+- **Found:** the image is pulled, its label must equal this build's
+  `release_id` or the run fails, and the digest is reused. Nothing is
+  rebuilt or pushed.
+- **ImageNotFoundException:** build and push once.
+- **Any other lookup error:** the run fails. A denied lookup is not taken as
+  "new".
+- **`fresh_build=true`:** the tag becomes
+  `<…>-run<run id>-<attempt>`. It is unique, for a deliberately new image of
+  the same content.
+
+A retry, or another commit with the same release content, therefore
+redeploys the exact bytes already scanned and smoke-tested. A reused image
+reports the commit it was built at (`git_sha`), which is true of those bytes.
+Legacy `<version>-<sha>` tags remain and are never reused.
+
+Tests: `tests/test_release_image_reuse.py` runs the step script under
+`bash -eo pipefail` with fake `aws`/`docker`. It covers reuse without a build,
+a single build under the content tag, a label of another release refused, a
+denied lookup refused, and a fresh-build unique tag. Checked on a real local
+build: the label, the manifest and the baked `release.json` carry the same id.
+
 ## Consequences
 
 - A rollback is an alias move (alias mode) or an image swap, verified against

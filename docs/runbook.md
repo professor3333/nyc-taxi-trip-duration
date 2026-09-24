@@ -114,7 +114,7 @@ The deploy fails instead of rebuilding when:
 - the recorded image has expired from ECR. Only the live release and its rollback target are pinned.
 - the role cannot read the ledger.
 
-In each case the run says which. If you accept a *new* release of that model, built from today's code, verified and recorded as new: `gh workflow run deploy.yml -f rebuild=true`. To restore one specific recorded release of the selected champion: `gh workflow run deploy.yml -f release_id=<id>`.
+In each case the run says which. If you accept a *new* release of that model, built from today's code, verified and recorded as new: `gh workflow run deploy.yml -f rebuild=true`. To restore one specific recorded release of the selected champion: `gh workflow run deploy.yml -f release_id=<id>`. A failed deploy can simply be re-run: the same release content reuses its already-pushed image (tag `<version>-<release id>`), and `-f fresh_build=true` forces a new image under a run-unique tag.
 
 Then watch `deploy.yml` and run the signed `deploy_check` exactly as in *Release*, with `--expect-version v<m>`. `make release-status BUCKET=<bucket>` shows the **selected** champion (`champion.json`) next to the **deployed** release (`releases/live.json`). They differ while a deploy is pending, or after one failed. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s, `"action": "rollback"`); the deploy needs only that file and the ledger. The manual edit is a last resort.
 
