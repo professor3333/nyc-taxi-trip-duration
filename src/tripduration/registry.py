@@ -27,6 +27,8 @@ import mlflow
 import yaml
 from mlflow import MlflowClient
 
+from tripduration.gate import PromotionPolicy
+
 MODEL_NAME = "nyc-taxi-trip-duration"
 CHAMPION = "champion"
 CHALLENGER = "challenger"
@@ -371,26 +373,110 @@ def promotion_gate(
     return Gate(passed=not reasons, reasons=tuple(reasons))
 
 
+GATE_BINDING_SCHEMA = 1
+
+
+def gate_binding(
+    month: str,
+    *,
+    candidate_model_md5: str | None,
+    candidate_dvc_lock_md5: str | None,
+    champion_version: int,
+    champion_model_md5: str | None,
+    policy_sha256: str,
+    monitoring_dir: Path = Path("reports/monitoring"),
+) -> dict[str, Any]:
+    """What a gate verdict was computed from; the verdict is valid only for it.
+
+    Written by ``scripts/gate_candidate.py`` and recomputed by ``promote()``
+    from the live state, so a verdict for other bytes, another champion, a
+    different policy or edited evidence is refused as stale. The candidate's
+    evaluation data (``data/processed/test.parquet``), its slice table
+    (``reports/eval``) and the reference data it was scored with are all
+    outputs or deps recorded in ``dvc.lock``, so its md5 covers them; the
+    champion's side is its prospective report and slice table on the month.
+    """
+    evidence = {
+        "prospective_sha256": monitoring_dir / f"{month}.json",
+        "slices_sha256": monitoring_dir / f"{month}-slices.csv",
+    }
+    return {
+        "schema": GATE_BINDING_SCHEMA,
+        "month": month,
+        "candidate": {
+            "model_md5": candidate_model_md5,
+            "dvc_lock_md5": candidate_dvc_lock_md5,
+        },
+        "champion": {
+            "version": champion_version,
+            "model_md5": champion_model_md5,
+            **{k: _sha256(p) if p.exists() else None for k, p in evidence.items()},
+        },
+        "reference_md5": reference_md5(),
+        "policy_sha256": policy_sha256,
+    }
+
+
+def _flat(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            out |= _flat(v, f"{prefix}{k}.")
+        else:
+            out[f"{prefix}{k}"] = v
+    return out
+
+
 def gate_report_reasons(
-    challenger: dict[str, str], monitoring_dir: Path = Path("reports/monitoring")
+    challenger: dict[str, str],
+    champion: ChampionState,
+    policy: PromotionPolicy,
+    monitoring_dir: Path = Path("reports/monitoring"),
 ) -> list[str]:
-    """Why the recorded gate verdict does not cover this version (empty = it does).
+    """Why the recorded gate verdict does not cover this promotion (empty = it does).
 
     ``scripts/gate_candidate.py`` applies the slice and bootstrap safeguards
-    and records the candidate's ``model_md5``; promotion accepts that verdict
-    only for the exact bytes it judged.
+    and records the ``gate_binding`` it judged. Promotion recomputes the
+    binding for *this* candidate, *this* champion, *this* policy and the
+    evidence on disk now; any difference makes the verdict stale, whatever
+    it says.
     """
     month = challenger["test_month"]
     path = monitoring_dir / f"gate-{month}.json"
+    rerun = f"re-run scripts/gate_candidate.py --month {month}"
     if not path.exists():
-        return [f"no gate report {path} (scripts/gate_candidate.py --month {month})"]
+        return [f"no gate report {path} ({rerun})"]
     rep = json.loads(path.read_text())
-    judged = rep.get("candidate", {}).get("model_md5")
-    if judged != challenger["model_md5"]:
-        return [
-            f"{path} judged model md5 {judged}, not this version's "
-            f"{challenger['model_md5']}"
-        ]
+    recorded = rep.get("binding")
+    if not isinstance(recorded, dict) or recorded.get("schema") != GATE_BINDING_SCHEMA:
+        return [f"{path} does not record what it judged (no binding); {rerun}"]
+    expected = gate_binding(
+        month,
+        candidate_model_md5=challenger.get("model_md5"),
+        candidate_dvc_lock_md5=challenger.get("dvc_lock_md5"),
+        champion_version=champion.version,
+        champion_model_md5=champion.model_md5,
+        policy_sha256=policy.sha256(),
+        monitoring_dir=monitoring_dir,
+    )
+    rec, exp = _flat(recorded), _flat(expected)
+    stale = [
+        f"{path} judged {key}={rec.get(key)}, not the current {value}"
+        for key, value in exp.items()
+        if rec.get(key) != value
+    ]
+    # An identity that is missing on both sides binds nothing.
+    stale += [
+        f"cannot bind the verdict: current {key} is unknown"
+        for key in (
+            "candidate.model_md5",
+            "candidate.dvc_lock_md5",
+            "champion.model_md5",
+        )
+        if not exp[key]
+    ]
+    if stale:
+        return [*stale, f"the verdict is stale; {rerun}"]
     if rep.get("verdict") != "pass":
         return [f"{path} verdict is {rep.get('verdict')}: " + "; ".join(rep["reasons"])]
     return []
@@ -470,7 +556,7 @@ def save_champion_fixture(local: Path, dest: Path) -> str:
     return _sha256(dest)
 
 
-def _reference_md5(
+def reference_md5(
     pointer: Path = Path("data/reference/zone_centroids.csv.dvc"),
 ) -> str:
     """md5 of the zone centroids, from its .dvc pointer (not a pipeline output)."""
@@ -620,7 +706,7 @@ def _state_for(
         promoted_at=promoted_at,
         previous_version=previous_version,
         reason=reason,
-        reference_md5=_reference_md5(),
+        reference_md5=reference_md5(),
         train_months=tuple(t for t in (tags.get("train_months") or "").split(",") if t),
         dvc_lock_md5=tags.get("dvc_lock_md5", ""),
         fixture_sha256=fixture_sha256,
@@ -781,13 +867,11 @@ def promote(
         if current and champ and champ["test_month"] != chal["test_month"]
         else None
     )
-    policy = yaml.safe_load(params_path.read_text())["promotion"]
-    gate = promotion_gate(
-        chal, champ, prospective, float(policy["min_relative_improvement"])
-    )
+    policy = PromotionPolicy.from_params(yaml.safe_load(params_path.read_text()))
+    gate = promotion_gate(chal, champ, prospective, policy.min_relative_improvement)
     failed = list(gate.reasons)
-    if champ is not None:  # a first promotion has nothing to be compared with
-        failed += gate_report_reasons(chal, monitoring_dir)
+    if current is not None:  # a first promotion has nothing to be compared with
+        failed += gate_report_reasons(chal, current, policy, monitoring_dir)
     if failed and not force:
         raise RegistryError("promotion gate failed: " + "; ".join(failed))
     if failed:

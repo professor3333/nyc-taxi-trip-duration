@@ -161,12 +161,37 @@ for every model and month. `evaluate` writes `reports/eval/test_slices.csv`,
 whose per-day or per-slice counts differ, because that means they were not
 scored on the same trips.
 
-**Binding the verdict to the bytes.** The gate report
-(`reports/monitoring/gate-<month>.json`) records the candidate's `model_md5`
-from `dvc.lock`. `promote.py` now refuses a non-first promotion unless that
-report exists, says `pass`, and judged this version's `model_md5`. It also
-re-applies (4) to the registry tags. `--force` still bypasses the gate, and
-the failed reasons are written into the `FORCED (...)` row.
+**Binding the verdict to what it judged (amended 2026-09-24, audit finding).**
+The first version of this rule bound the gate report only to the candidate's
+`model_md5`. An external audit reproduced the consequence: a `pass` computed
+against an earlier champion, or under a looser policy, still satisfied
+`promote.py`. The aggregate MAE comparison was recomputed at promotion time,
+but the slice and bootstrap verdict came from the old report unchecked.
+
+The gate report (`reports/monitoring/gate-<month>.json`) now carries a
+`binding` (`registry.gate_binding`) with these fields:
+
+| field | covers |
+|---|---|
+| `candidate.model_md5` | the judged bytes |
+| `candidate.dvc_lock_md5` | the candidate's evaluation data (`data/processed/test.parquet`), its slice table (`reports/eval`), reference-data deps. All are recorded in `dvc.lock`, and the registration tag `dvc_lock_md5` is the same file's md5 |
+| `champion.version`, `champion.model_md5` | the champion it was compared with |
+| `champion.prospective_sha256`, `champion.slices_sha256` | the champion's evidence on the month, byte for byte |
+| `reference_md5` | `zone_centroids.csv` pointer, the reference the release will ship with |
+| `policy_sha256` | `PromotionPolicy` (`params.yaml › promotion` + seed), canonical JSON |
+
+`promote.py` recomputes the binding from the live state: the registry tags of
+the version, `champion.json`, `params.yaml` and the files on disk. It then
+compares the two field by field. Any difference makes the verdict **stale**,
+and the refusal names each field that changed and says to re-run
+`gate_candidate.py`. A report without a binding is refused outright. Staleness
+is checked before the verdict, so an old `fail` cannot be recycled either.
+Recomputing the gate inside `promote.py` was the alternative. It was rejected
+because the candidate's slice table is not a registered artefact, and a check
+against a hash needs no evaluation data on the promoting machine. Beyond this,
+`promote.py` still re-applies (4) to the registry tags. `--force` still
+bypasses everything, and the failed reasons are written into the
+`FORCED (...)` row.
 
 **Calibration on real data (2026-09-24).** The retrain candidate for 2025-04
 (trained 2024-10..2025-02) was compared with v3 (trained 2024-10..2024-11),
@@ -177,12 +202,15 @@ passes the new gate as it passed the old one. The rule is written to stop the
 cases the old one let through, and it does not block a clear gain. Tests:
 `tests/test_gate.py` (a better average that hurts JFK pickups by 15% fails;
 equal models fail; tables from different trips are refused),
-`tests/test_gate_candidate.py`, `tests/test_registry.py` (a report for other
-bytes, a failing report, a missing report, and a 0.2% gain are each refused).
+`tests/test_gate_candidate.py` (the written binding round-trips through the
+promotion check), `tests/test_registry.py` (a report for other bytes, a
+failing report, a missing report, a 0.2% gain, a pass against another
+champion version or champion bytes, another `dvc.lock`, another policy,
+edited champion evidence, and a report with no binding are each refused).
 
 **Consequences.**
 - The existing `gate-2025-03.json` / `gate-2025-04.json` predate this and
-  carry no `model_md5`. Promoting either candidate needs `gate_candidate.py`
+  carry no `binding`. Promoting either candidate needs `gate_candidate.py`
   re-run on outputs from the current `evaluate` (the next retrain produces
   them), or `--force` with a reason.
 - A candidate can now fail while being better on average. That is intended.
