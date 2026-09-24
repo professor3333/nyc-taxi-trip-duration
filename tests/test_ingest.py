@@ -198,7 +198,7 @@ def test_check_schema_reports_source_schema_and_mapping(schema: RawSchema) -> No
         "DOLocationID": "do_location_id",
         "Airport_fee": "airport_fee",
     }
-    assert info["missing_optional"] == ["cbd_congestion_fee"]
+    assert info["missing_optional"] == ["cbd_congestion_fee", "request_source"]
 
 
 def test_check_schema_rejects_unknown_column(schema: RawSchema) -> None:
@@ -237,6 +237,18 @@ def test_normalise_adds_missing_optional_column_as_null(schema: RawSchema) -> No
     col = out.column("cbd_congestion_fee")
     assert col.null_count == out.num_rows
     assert col.type == pa.float64()
+
+
+def test_normalise_accepts_the_2026_request_source_column(schema: RawSchema) -> None:
+    """2026-06 added `request_source` (large_string; null for street hails).
+    It is accepted, cast to the canonical string type and kept as published."""
+    t = _variant_table()
+    vals = ["HV0003", None] + [None] * (t.num_rows - 2)
+    t = t.append_column("request_source", pa.array(vals, pa.large_string()))
+    out, info = normalise(t, schema)
+    assert out.column("request_source").type == pa.string()
+    assert out.column("request_source").to_pylist() == vals
+    assert info["missing_optional"] == ["cbd_congestion_fee"]
 
 
 def test_normalise_preserves_rows_and_values(schema: RawSchema) -> None:
@@ -284,7 +296,7 @@ def test_ingest_month_report_has_provenance(schema: RawSchema, tmp_path: Path) -
     assert r["source_url"].endswith("yellow_tripdata_2024-07.parquet")
     assert r["source_schema"]["PULocationID"] == "int32"
     assert r["canonical_map"]["Airport_fee"] == "airport_fee"
-    assert r["missing_optional"] == ["cbd_congestion_fee"]
+    assert r["missing_optional"] == ["cbd_congestion_fee", "request_source"]
     assert "replaced_source_md5" not in r
     assert r["path"].endswith("2024-07.parquet")
 

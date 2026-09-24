@@ -71,7 +71,7 @@ quality:                    # acceptance rules; any failure stops the pipeline b
     tpep_dropoff_datetime: 0.0
     pu_location_id: 0.0
     do_location_id: 0.0
-    passenger_count: 0.25   # ~10% is normal (one vendor feed); not a feature, so tolerated
+    passenger_count: 0.40   # null on app-dispatched trips (request_source set): 25-30% in 2025-26; not a feature
   duration_p50_bounds: [5.0, 30.0]    # median trip, minutes
   duration_p99_bounds: [30.0, 180.0]
   max_share_single_zone_pair: 0.05    # one pair dominating means a broken join or a test file
