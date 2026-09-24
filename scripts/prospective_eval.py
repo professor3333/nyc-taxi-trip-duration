@@ -12,6 +12,13 @@ verdict: `degraded` when MAE exceeds the promotion-time test MAE by more than
 Exit 0 always (the verdict is data; retrain.yml turns it into an issue), 2 if
 the champion has already seen the month. Also writes
 reports/monitoring/YYYY-MM-slices.csv (slices.slice_table) for the gate.
+
+``--champion-test-month`` scores the champion on its *own* test month instead
+(the report says ``"prospective": false``). The gate needs the champion's slice
+table on the candidate's month, and when a candidate is tested on the same
+month as the champion (a retrain on an unchanged window) that month is the
+champion's test month. It was never fit on, so scoring it is not leakage;
+it is just not prospective. Train and validation months are still refused.
 """
 
 from __future__ import annotations
@@ -48,12 +55,26 @@ def main() -> int:
     ap.add_argument("--models-dir", type=Path, default=Path("build/champion/models"))
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
     ap.add_argument("--out-dir", type=Path, default=Path("reports/monitoring"))
+    ap.add_argument(
+        "--champion-test-month",
+        action="store_true",
+        help="score the champion on its own test month, for a same-month gate",
+    )
     args = ap.parse_args()
 
     params = load_params()
     champ = json.loads(args.champion.read_text())
     meta = json.loads((args.models_dir / "model_meta.json").read_text())
     seen = set(meta["train_months"]) | {meta["val_month"], meta["test_month"]}
+    if args.champion_test_month:
+        if args.month != meta["test_month"]:
+            print(
+                f"--champion-test-month: {args.month} is not champion "
+                f"v{champ['version']}'s test month {meta['test_month']}",
+                file=sys.stderr,
+            )
+            return 2
+        seen.discard(args.month)
     if args.month in seen:
         print(
             f"champion v{champ['version']} already saw {args.month} "
@@ -101,6 +122,7 @@ def main() -> int:
     )
     report = {
         "month": args.month,
+        "prospective": not args.champion_test_month,
         "champion_version": champ["version"],
         "champion_git_sha": champ["git_sha"],
         "champion_train_months": meta["train_months"],

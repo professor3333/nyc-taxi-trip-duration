@@ -193,6 +193,21 @@ against a hash needs no evaluation data on the promoting machine. Beyond this,
 bypasses everything, and the failed reasons are written into the
 `FORCED (...)` row.
 
+**Same-month candidates are not exempt (amended 2026-09-24).** When the
+candidate's test month equals the champion's own test month (a retrain on an
+unchanged window, e.g. after a code or hyperparameter change), the aggregate
+comparison uses the champion's recorded test MAE. There is no prospective
+evaluation of a month the model was tested on. The slice and bootstrap
+checks were then skipped, so a candidate could pass on the aggregate alone. Now
+`gate_candidate.py` requires the champion's slice table in that case too, from
+`prospective_eval.py --month <M> --champion-test-month`. That run scores the
+champion on its own test month: never fit on, so not leakage, and its report
+says `"prospective": false`. Train and validation months are still refused.
+The report must name the current champion's version. With no such report the
+verdict is a fail. Tests: `tests/test_gate_candidate.py` (same-month without
+slices fails, a 0.2% same-month gain fails the safeguards, a real gain
+passes, another champion's slices do not count).
+
 **Calibration on real data (2026-09-24).** The retrain candidate for 2025-04
 (trained 2024-10..2025-02) was compared with v3 (trained 2024-10..2024-11),
 both scored on all 3,805,957 valid 2025-04 trips. The improvement was +4.30%,
