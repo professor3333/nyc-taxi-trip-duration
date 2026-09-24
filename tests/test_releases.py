@@ -177,3 +177,23 @@ def test_mark_live_refuses_an_unrecorded_release() -> None:
         == 1
     )
     assert releases.LIVE_KEY not in s3.objects
+
+
+def test_live_id_distinguishes_not_seeded_from_unreadable(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    s3 = FakeS3()
+    assert releases.main(["live-id", "--bucket", "b"], s3=s3) == 0
+    assert capsys.readouterr().out.strip() == ""  # not seeded: nothing to expect
+    _put(s3, tmp_path, "3" * 64, "v3", "r@sha256:cc")
+    releases.main(["mark-live", "--bucket", "b", "--release-id", "3" * 64], s3=s3)
+    capsys.readouterr()
+    assert releases.main(["live-id", "--bucket", "b"], s3=s3) == 0
+    assert capsys.readouterr().out.strip() == "3" * 64
+
+    class Denied(FakeS3):
+        def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+
+    with pytest.raises(ClientError):  # an unreadable ledger is a failure
+        releases.main(["live-id", "--bucket", "b"], s3=Denied())
