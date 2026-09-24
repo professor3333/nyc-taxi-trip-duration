@@ -84,6 +84,37 @@ def _slices(
     slice_table(frame, ref, {"model": y + champ_noise * noise}).to_csv(
         tmp_path / "monitoring" / f"{month}-slices.csv", index=False
     )
+    _sync_aggregates(tmp_path, month)
+
+
+def _day_mae(path: Path) -> float:
+    import pandas as pd
+
+    d = pd.read_csv(path).query("family == 'day'")
+    return float(d["sum_ae_model"].sum() / d["n"].sum())
+
+
+def _sync_aggregates(tmp_path: Path, month: str) -> None:
+    """Make every aggregate MAE the fixtures state agree with the slice
+    tables, as it does in a real run (the gate now checks it). Keeps the
+    fixtures' intent: the fallback stays above the candidate."""
+    cand = _day_mae(tmp_path / "eval" / "test_slices.csv")
+    champ = _day_mae(tmp_path / "monitoring" / f"{month}-slices.csv")
+    metrics = tmp_path / "metrics" / "eval.json"
+    ev = json.loads(metrics.read_text())
+    ev["test"]["model"]["mae"] = cand
+    ev["test"]["fallback"]["mae"] = max(ev["test"]["fallback"]["mae"], 2 * champ)
+    metrics.write_text(json.dumps(ev))
+    prospective = tmp_path / "monitoring" / f"{month}.json"
+    if prospective.exists():
+        rep = json.loads(prospective.read_text())
+        rep["model"]["mae"] = champ
+        prospective.write_text(json.dumps(rep))
+    champion = tmp_path / "champion.json"
+    doc = json.loads(champion.read_text())
+    if doc["test_month"] == month:
+        doc["mae_test_model"] = champ
+        champion.write_text(json.dumps(doc))
 
 
 def _run(metrics: Path, champion: Path, monitoring: Path, month: str) -> dict[str, Any]:
@@ -291,3 +322,32 @@ def test_same_month_slices_of_another_champion_do_not_count(tmp_path: Path) -> N
     _slices(tmp_path, "2025-01", cand_noise=0.9)
     r = _run(m, c, d, "2025-01")
     assert r["verdict"] == "fail" and r["safeguards"] is None
+
+
+def test_slice_tables_missing_gated_families_fail_the_gate(tmp_path: Path) -> None:
+    """End to end: the audit's family-less evidence is a fail, with the reason."""
+    import pandas as pd
+
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-02")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    _slices(tmp_path, "2025-02", cand_noise=0.9)
+    for path in (tmp_path / "eval" / "test_slices.csv", d / "2025-02-slices.csv"):
+        t = pd.read_csv(path)
+        t[t["family"] == "day"].to_csv(path, index=False)
+    r = _run(m, c, d, "2025-02")
+    assert r["verdict"] == "fail" and r["safeguards"] is None
+    assert any("slice evidence refused" in x for x in r["reasons"])
+
+
+def test_a_prospective_mae_from_another_evaluation_fails(tmp_path: Path) -> None:
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-02")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    _slices(tmp_path, "2025-02", cand_noise=0.9)
+    rep = json.loads((d / "2025-02.json").read_text())
+    rep["model"]["mae"] *= 1.05  # the aggregate no longer matches its slices
+    (d / "2025-02.json").write_text(json.dumps(rep))
+    r = _run(m, c, d, "2025-02")
+    assert r["verdict"] == "fail"
+    assert any("not the same evaluation" in x for x in r["reasons"])

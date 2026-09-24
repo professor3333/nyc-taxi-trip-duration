@@ -22,7 +22,9 @@ and the champion's ``reports/monitoring/<month>-slices.csv``: a minimum
 worthwhile improvement whose day-block bootstrap interval excludes zero, and
 no gated slice (period, airport, borough pair, busy route) worse by more than
 the policy allows. A missing slice table is a fail, like a missing
-prospective evaluation.
+prospective evaluation, and so is a table that is malformed, incomplete
+(a required slice family absent) or not the evaluation its aggregate MAE came
+from (``gate.validate_slice_table``, ``gate.check_matches_aggregate``).
 
 Writes ``reports/monitoring/gate-<month>.json`` and prints a short verdict.
 The report's ``binding`` (``registry.gate_binding``) records what was judged:
@@ -47,7 +49,12 @@ from typing import Any
 import pandas as pd
 
 from tripduration.config import load_params
-from tripduration.gate import MismatchedEvaluationError, PromotionPolicy, assess
+from tripduration.gate import (
+    EvidenceError,
+    PromotionPolicy,
+    assess,
+    check_matches_aggregate,
+)
 from tripduration.registry import dvc_lock_md5s, file_md5, gate_binding, promotion_gate
 
 
@@ -123,12 +130,22 @@ def main() -> int:
         reasons.append(f"no slice comparison: missing {', '.join(missing)}")
     else:
         try:
-            more, safeguards = assess(
-                pd.read_csv(args.candidate_slices), pd.read_csv(champ_slices), policy
+            cand_t, champ_t = (
+                pd.read_csv(args.candidate_slices),
+                pd.read_csv(champ_slices),
+            )
+            more, safeguards = assess(cand_t, champ_t, policy)
+            # Each table must be the evaluation its aggregate MAE came from.
+            check_matches_aggregate(
+                cand_t, float(ev["test"]["model"]["mae"]), name="candidate"
+            )
+            check_matches_aggregate(
+                champ_t, float(champ_eval["model"]["mae"]), name="champion"
             )
             reasons += more
-        except MismatchedEvaluationError as e:
-            reasons.append(str(e))
+        except EvidenceError as e:
+            safeguards = None
+            reasons.append(f"slice evidence refused: {e}")
 
     lock = dvc_lock_md5s(args.dvc_lock) if args.dvc_lock.exists() else {}
     report: dict[str, Any] = {
