@@ -47,12 +47,20 @@ jobs:
       # (releases/live.json) are different facts: a promotion moves the first,
       # only a successful deploy moves the second. The check below requires the
       # service to report the release the ledger says is deployed.
+      #
+      # Health is decided from step *outcomes* (below), never from flags a
+      # step writes on its own failure path: with continue-on-error a step's
+      # `outcome` is `failure` however it failed (a failed AWS call before
+      # the check, a crash), while its `conclusion` is `success`.
       - name: Selected champion vs deployed release
+        id: ledger
         if: env.LEDGER == 'true'
         continue-on-error: true
         run: |
           uv run python scripts/releases.py status --bucket "$BUCKET" | tee -a "$GITHUB_STEP_SUMMARY"
-          RID=$(aws s3 cp "s3://$BUCKET/releases/live.json" - 2>/dev/null | jq -r '.release_id // empty' || true)
+          # Empty only when nothing is recorded yet (ledger not seeded); an
+          # unreadable ledger fails this step, and so the health decision.
+          RID=$(uv run python scripts/releases.py live-id --bucket "$BUCKET")
           echo "EXPECT_RELEASE=$RID" >> "$GITHUB_ENV"
 
       - name: Check the live service
@@ -62,8 +70,7 @@ jobs:
           uv run python scripts/deploy_check.py --invoke "$TARGET" \
             --expect-version "v$(jq -r .version models/champion.json)" \
             ${EXPECT_RELEASE:+--expect-release "$EXPECT_RELEASE"} \
-            --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt \
-            || echo "failed=true" >> "$GITHUB_OUTPUT"
+            --expect-fixture models/champion_fixture.csv --malformed 2>&1 | tee check.txt
 
       # The endpoint callers actually use: an HTTP request to the Function URL,
       # SigV4-signed as this (non-root) role. The Lambda-API check above
@@ -71,25 +78,45 @@ jobs:
       - name: Check the Function URL over HTTP
         id: url
         continue-on-error: true
+        env:
+          FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
         run: |
-          URL=$(aws lambda get-function-url-config --function-name "${{ secrets.LAMBDA_FUNCTION_NAME }}" \
-            ${URL_QUALIFIER:+--qualifier "$URL_QUALIFIER"} --query FunctionUrl --output text)
+          # Any failure in this step - resolving the URL included - fails it,
+          # and its outcome is what the issue logic reads.
+          if ! URL=$(aws lambda get-function-url-config --function-name "$FN" \
+              ${URL_QUALIFIER:+--qualifier "$URL_QUALIFIER"} --query FunctionUrl --output text 2>&1); then
+            echo "FAIL  Function URL configuration unreadable: $URL" | tee -a check.txt
+            exit 1
+          fi
           # End to end from outside AWS: 10 warm /predict calls over the real
           # network path, p95 enforced and published as E2ELatencyMs.
           uv run python scripts/deploy_check.py --url "$URL" --sigv4 \
             --expect-version "v$(jq -r .version models/champion.json)" \
+            ${EXPECT_RELEASE:+--expect-release "$EXPECT_RELEASE"} \
             --expect-fixture models/champion_fixture.csv --malformed \
-            --latency-samples 10 --publish-metrics monitor 2>&1 | tee -a check.txt \
-            || echo "failed=true" >> "$GITHUB_OUTPUT"
+            --latency-samples 10 --publish-metrics monitor 2>&1 | tee -a check.txt
 
+      # Unhealthy unless every check explicitly succeeded: failure, skipped
+      # and cancelled all count. The ledger step counts only where it runs.
       - name: Open or update issue
-        if: steps.check.outputs.failed == 'true' || steps.url.outputs.failed == 'true'
+        if: >-
+          always() && (steps.check.outcome != 'success' || steps.url.outcome != 'success'
+          || (env.LEDGER == 'true' && steps.ledger.outcome != 'success'))
         env:
           GH_TOKEN: ${{ github.token }}
+          CHECK: ${{ steps.check.outcome }}
+          URL_CHECK: ${{ steps.url.outcome }}
+          LEDGER_CHECK: ${{ steps.ledger.outcome }}
         run: |
           {
-            echo "deploy_check failed on $(date -u +%FT%TZ):"
-            echo; echo '```'; cat check.txt; echo '```'
+            echo "Service check failed on $(date -u +%FT%TZ):"
+            echo
+            echo "| check | outcome |"
+            echo "|---|---|"
+            echo "| Lambda API (\`deploy_check --invoke\`) | $CHECK |"
+            echo "| Function URL over HTTP | $URL_CHECK |"
+            echo "| deployed release (ledger) | ${LEDGER_CHECK:-not run} |"
+            echo; echo '```'; cat check.txt 2>/dev/null || echo "(no check output)"; echo '```'
             echo; echo "Runbook: docs/runbook.md#service-down-or-degraded"
           } > body.md
           N=$(gh issue list --label service-health --state open --json number -q '.[0].number')
@@ -128,8 +155,12 @@ jobs:
             gh issue close "$N" --comment "Fresh again on $(date -u +%FT%TZ)."
           fi
 
+      # Only after BOTH service checks (and the ledger read, where it runs)
+      # explicitly succeeded in this run.
       - name: Close issue when healthy
-        if: steps.check.outputs.failed != 'true' && steps.url.outputs.failed != 'true'
+        if: >-
+          always() && steps.check.outcome == 'success' && steps.url.outcome == 'success'
+          && (env.LEDGER != 'true' || steps.ledger.outcome == 'success')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

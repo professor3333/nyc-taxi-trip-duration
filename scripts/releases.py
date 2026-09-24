@@ -6,6 +6,7 @@
     uv run python scripts/releases.py get       --bucket B --release-id ID --out DIR
     uv run python scripts/releases.py mark-live --bucket B --release-id ID [--run-url U]
     uv run python scripts/releases.py status    --bucket B [--champion FILE]
+    uv run python scripts/releases.py live-id   --bucket B   # "" if none recorded
 
 ``s3://<bucket>/releases/<release_id>.json`` is written by deploy.yml once a
 release has passed its checks on Lambda. It holds the manifest (what the
@@ -166,7 +167,9 @@ def _records(s3: Any, bucket: str) -> list[dict[str, Any]]:
 
 def main(argv: list[str] | None = None, s3: Any = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("action", choices=["put", "find", "get", "mark-live", "status"])
+    ap.add_argument(
+        "action", choices=["put", "find", "get", "mark-live", "status", "live-id"]
+    )
     ap.add_argument("--bucket", required=True)
     ap.add_argument("--manifest", type=Path)
     ap.add_argument("--image")
@@ -238,6 +241,13 @@ def main(argv: list[str] | None = None, s3: Any = None) -> int:
         }
         _put(s3, args.bucket, LIVE_KEY, live)
         print(f"live: {live['model_version']} release {live['release_id']}")
+        return 0
+
+    if args.action == "live-id":
+        # Missing live.json (ledger not seeded) prints nothing; any other
+        # error (access, network) raises and exits non-zero.
+        live = _get(s3, args.bucket, LIVE_KEY)
+        print(live["release_id"] if live else "")
         return 0
 
     champion = json.loads(args.champion.read_text()) if args.champion.exists() else None
