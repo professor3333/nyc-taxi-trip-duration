@@ -117,7 +117,8 @@ def weakest_slices(slices: pd.DataFrame, k: int = 12) -> pd.DataFrame:
         .reindex(pooled.index, fill_value=0)
     )
     pooled["gain"] = 1 - pooled["model MAE"] / pooled["fallback MAE"]
-    pooled = pooled[pooled["folds"] >= 3]
+    # A slice seen in a few folds, or with a handful of trips, is noise here.
+    pooled = pooled[(pooled["folds"] >= 3) & (pooled["trips (M)"] * 1e6 >= 10 * MIN_N)]
     return pooled.sort_values("gain").head(k).reset_index()
 
 
@@ -224,7 +225,8 @@ def render(folds: list[dict[str, Any]], slices: pd.DataFrame) -> str:
         "## Weakest slices",
         "",
         "Pooled over every fold: the gated slices (ADR-0007 amendment) where the "
-        "model's lead over the lookup table is thinnest. `folds model loses` "
+        "model's lead over the lookup table is thinnest, among slices in at least "
+        f"3 folds with at least {10 * MIN_N:,} trips in total. `folds model loses` "
         f"counts folds where the slice had at least {MIN_N:,} trips and the "
         "model's MAE was not below the table's.",
         "",

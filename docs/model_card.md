@@ -39,6 +39,25 @@ guarantee. Zones 264 (Unknown) and 265 (Outside NYC) are refused.
 MAPE is 31–35 % and dominated by short trips; MAE is the primary metric
 (ADR-0001). Per-hour and per-borough-pair MAE tables: `reports/eval/`.
 
+## Across seasons and regimes (rolling backtest)
+
+The single-month numbers above are one draw each. `docs/backtest.md` replays
+the recipe at the full six-month window for every test month 2024-09 ..
+2026-07 (23 separately trained models):
+
+- The model beat the lookup table in **all 23 months**: mean gain +8.2%
+  (worst +4.9% in 2025-01, the first month of congestion pricing; best +10.6%).
+- Model MAE ranged 3.48–4.76 min. December is the hardest month in both
+  years (4.75 min); winter has the smallest gain (+7.1%).
+- Bias is negative in most months (down to −2.4 min): the model predicts the
+  median (absolute-error loss) of a right-skewed target. It under-predicts
+  the mean by design, not by drift.
+- The weakest slices are short Upper West/East Side routes (e.g. 238→239,
+  239→238, 236→236), where the model only matches the zone-pair median.
+
+These are historical results for the recipe, not for the serving model on
+today's traffic.
+
 ## Deployed accuracy (live, real trips)
 
 The numbers above are offline. `make live-accuracy` checks that the deployed

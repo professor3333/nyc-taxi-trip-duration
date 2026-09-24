@@ -275,3 +275,21 @@ New:
   - Trivy on the image, which is clean today; its negative control, `python:3.9.0-slim`, gives 103 findings and exit 1.
 - **Automatic restore, proven live** (deploy run 35887599074, `inject_failure=true`): image `v3-cf3b32b` (`sha256:bc1c0335…`) was deployed and passed every check (cold start, 80/80 fixtures, malformed → 422, URL edge). The injected failure fired, and the restore step put back `v3-23ee944` (`sha256:672772635c70…`). Checked independently afterwards: Lambda runs `sha256:672772635c70…`, which ECR identifies as `v3-23ee944`, and `/health` is ok with v3. The run is red, as a restored deploy should be.
 - CI run 35886514858 (PR #69) exercised every new gate: shellcheck 0.11.0 pinned (the runner's 0.9.0 disagreed, so CI now uses the digest-pinned image); audit clean (1 accepted); `dvc repro` test 4/4 in 25 s; the registry drill verified, and the tampered backup was rejected with `FAIL aliases`.
+
+## Model quality: rolling evaluation, promotion safeguards, live accuracy, runner budget — 2026-09-24
+
+The review's five remaining items, each with its evidence:
+- **Rolling evaluation across seasons and regimes** (#74; results here): `backtest.yml` run 35950037175, 23 folds 2024-09..2026-07 at the full window. The model beat the lookup table in every month (mean +8.2%, worst +4.9% in 2025-01). `docs/backtest.md` is generated from `reports/backtest/` and `tests/test_backtest.py` keeps the two in agreement.
+- **Slice-level promotion safeguards** and **a minimum worthwhile improvement** (#73, ADR-0007 amendment):
+  - ≥ 1% better on the same month, with the 95% day-block bootstrap lower bound > 0;
+  - no period, airport, borough-pair or busy-route slice (n ≥ 2,000) more than 3% worse;
+  - the gate report is bound to the candidate's model md5.
+  
+  The real 2025-04 candidate vs v3 still passes: +4.30% [+3.31%, +5.24%], 0 of 55 slices worse.
+- **Deployed accuracy** (#75): `make live-accuracy`. Live v1 through the Function URL on 5,000 real 2024-12 trips: 5,000 of 5,000 predictions identical to the x86_64 offline model; live MAE 4.702 [4.541, 4.863] against the recorded 4.689.
+- **Resources at the full six-month window** (ADR-0003 amendment): peak RSS ≤ 7.4 GB at 23.9M rows, fit ≤ 7.2 min, fold ≤ 9.1 min on the 4 vCPU / 15.6 GB runner. `train_sample_frac` stays 1.0.
+- **Found on the way** (#76, ADR-0002 amendment):
+  - TLC added `request_source` in 2026-06 (app dispatch, e.g. `HV0003`), and ingest refused it as drift;
+  - `passenger_count` is null on exactly those trips, so the quality stage blocked 7 months from 2025-05, including the next scheduled retrain.
+  
+  Both are fixed: `request_source` is an optional column that is never a feature, and the null ceiling is now 40%.

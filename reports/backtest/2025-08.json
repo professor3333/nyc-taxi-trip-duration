@@ -1,0 +1,168 @@
+{
+  "clipped_model_mae": 3.5842221718812337,
+  "finished_at": "2026-09-24T03:17:08+00:00",
+  "git_sha": "70fdd4d13832eb9f31478fcc3730c8a1c882be48",
+  "inputs": {
+    "2025-01": {
+      "bytes": 59158238,
+      "etag": "3f99a46606c0c7e76a386f81167d8e15-12",
+      "rows": 3475226,
+      "source_md5": "c403f3bc3a64a1405e1a39817bc7e414",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet"
+    },
+    "2025-02": {
+      "bytes": 60343086,
+      "etag": "d19a36ff5f2728d5fb856785ff055bda-12",
+      "rows": 3577543,
+      "source_md5": "0f61bd9b136ad698c6d9094db2fa75e0",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-02.parquet"
+    },
+    "2025-03": {
+      "bytes": 69964745,
+      "etag": "5a7b279b75549fe3c5270e995a5b8c02-14",
+      "rows": 4145257,
+      "source_md5": "70f84a035ad186f8d9d50c26015b0d48",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-03.parquet"
+    },
+    "2025-04": {
+      "bytes": 67352824,
+      "etag": "6cb85e58a1a6db7ef4610209de63c7ff-13",
+      "rows": 3970553,
+      "source_md5": "24dc0e49aeb62eeea30df75e36b8f123",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-04.parquet"
+    },
+    "2025-05": {
+      "bytes": 77837865,
+      "etag": "82ed0af5930f3035156cb5f8cb248725-15",
+      "rows": 4591845,
+      "source_md5": "052bd8ab19be321f74a8d84580fb9d52",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-05.parquet"
+    },
+    "2025-06": {
+      "bytes": 73542954,
+      "etag": "fc94b9119612348a42e0887bb449b155-15",
+      "rows": 4322960,
+      "source_md5": "57f71ffad99226b8bae21b5bbfd0e575",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-06.parquet"
+    },
+    "2025-07": {
+      "bytes": 66943728,
+      "etag": "16edd40595f73ceb5035197d0e652dbc-13",
+      "rows": 3898963,
+      "source_md5": "1bffe604064716726e933bd68fcb5764",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-07.parquet"
+    },
+    "2025-08": {
+      "bytes": 62293743,
+      "etag": "7e65c5d9df82665d81d51f84f1e62011-12",
+      "rows": 3574091,
+      "source_md5": "69cfd9554b5d88ea2256df4f94b8d8db",
+      "source_url": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-08.parquet"
+    }
+  },
+  "model_gain_vs_fallback": 0.07117898321190297,
+  "model_params": {
+    "l2_regularization": 1.0,
+    "learning_rate": 0.1,
+    "loss": "absolute_error",
+    "max_bins": 255,
+    "max_iter": 300,
+    "max_leaf_nodes": 63,
+    "min_samples_leaf": 200
+  },
+  "params_hash": "4399ca8445b04f56",
+  "resources": {
+    "fit_seconds": 432.1,
+    "machine": {
+      "container": "tripduration-train:10f6058c0294@sha256:da6e562f1e3a8377e9c0ac33a6b1fb848060297ed6993e22d016ad50eb3345b4",
+      "cpu_count": 4,
+      "memory_gb": 15.6,
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.41"
+    },
+    "n_threads": 4,
+    "peak_rss_mb": 7324.0,
+    "phases": {
+      "fit_and_validate": {
+        "peak_rss_mb_after": 7324.0,
+        "seconds": 466.1
+      },
+      "prepare_train_val": {
+        "peak_rss_mb_after": 6119.0,
+        "seconds": 44.2
+      },
+      "test": {
+        "peak_rss_mb_after": 7324.0,
+        "seconds": 37.4
+      }
+    },
+    "total_seconds": 547.6
+  },
+  "rows": {
+    "test": 3386662,
+    "train": 23115028,
+    "val": 3705574
+  },
+  "run_url": "https://github.com/professor3333/nyc-taxi-trip-duration/actions/runs/35950037175",
+  "split": {
+    "test": "2025-08",
+    "train": [
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06"
+    ],
+    "val": "2025-07"
+  },
+  "test": {
+    "fallback": {
+      "bias": -0.4430100641870964,
+      "mae": 3.8588943478859123,
+      "mape": 28.578444546036756,
+      "n": 3386662,
+      "p90_ae": 8.033333333333335,
+      "rmse": 6.255190082581939
+    },
+    "fallback_level_share": {
+      "borough_hour": 0.0028627007950601507,
+      "global": 2.6574839768479997e-06,
+      "pair": 0.01266645446164985,
+      "pair_hour": 0.9844681872593132
+    },
+    "model": {
+      "bias": -0.3847694277917833,
+      "mae": 3.5842221718812337,
+      "mape": 27.344675523896004,
+      "n": 3386662,
+      "p90_ae": 7.409273170079594,
+      "rmse": 5.7628574680434275
+    }
+  },
+  "test_month": "2025-08",
+  "train_sample_frac": 1.0,
+  "val": {
+    "fallback": {
+      "bias": -0.8819992035421953,
+      "mae": 4.013933666776952,
+      "mape": 28.966713037726567,
+      "n": 3705574,
+      "p90_ae": 8.591666666666669,
+      "rmse": 6.446358071915725
+    },
+    "fallback_level_share": {
+      "borough_hour": 0.0023264951664708354,
+      "global": 2.4287735179489063e-06,
+      "pair": 0.010707922713188295,
+      "pair_hour": 0.9869631533468229
+    },
+    "model": {
+      "bias": -0.7199839178773066,
+      "mae": 3.6762795107322654,
+      "mape": 27.561654816375597,
+      "n": 3705574,
+      "p90_ae": 7.719799400873066,
+      "rmse": 5.859622711239569
+    }
+  }
+}
