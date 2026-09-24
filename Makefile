@@ -83,7 +83,7 @@ live-accuracy: ## Live service vs offline champion vs recorded MAE on real trips
 	uv run python scripts/fetch_champion.py
 	uv run python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) sample
 	TRAIN_ENV_NETWORK=none scripts/train_env.sh uv run --locked python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) offline
-	uv run python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) live --invoke $${LAMBDA_FUNCTION_NAME:-nyc-taxi-trip-duration}
+	uv run python scripts/live_accuracy.py $(if $(MONTH),--month $(MONTH)) live --invoke $${LAMBDA_FUNCTION_NAME:-nyc-taxi-trip-duration}$${LAMBDA_QUALIFIER:+:$$LAMBDA_QUALIFIER}
 
 promote-recover: ## Finish an interrupted promote/rollback/refresh (see docs/runbook.md)
 	uv run python scripts/promote.py --recover

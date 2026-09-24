@@ -50,9 +50,27 @@ uv run python scripts/deploy_check.py --url "$URL" --sigv4 --expect-version v<n>
 
 ## Failed deploy (automatic restore)
 
-If any check after the Lambda update fails, `deploy.yml` puts back the image that was serving before (`PREV_IMAGE`). It verifies that image is the one running and healthy (`deploy_check --invoke --malformed`), writes both digests to the run summary, and still fails the run. Afterwards the service runs the previous *image*, but `models/champion.json` still names the new champion, so `monitor.yml` reports the version mismatch until you either fix and redeploy or run a model rollback (below). Drill: `gh workflow run deploy.yml -f inject_failure=true`. It fails after all checks pass, so the restore can be observed.
+Every deploy first runs the exact pushed image on the runner with the real champion baked in: the model must load (a degraded `/health` fails), `/ready` must pass, all 80 `champion_fixture.csv` predictions must match, and malformed input must be a 422. A vulnerable image (Trivy: CRITICAL/HIGH with a fix) or a failed smoke test stops the run before Lambda changes.
 
-A vulnerable release image never reaches Lambda: the Trivy gate (CRITICAL/HIGH with a fix) runs before the update.
+What happens after that depends on the repository variable `RELEASE_MODE`:
+
+- **`alias`** (verified release). The image becomes a new published version that serves no traffic. It is checked through the Lambda API: cold start, version, fixtures, malformed. Only then does the `live` alias, which the Function URL serves, move to it. If the candidate fails, `live` never changed, and the run summary says "Candidate rejected before release". If something fails after the move (the URL check, or the drill), `live` goes back to `PREV_VERSION`. That version is then verified and the run still fails.
+- **`latest`** (default until the migration below). The function is updated in place and checked afterwards. If a check fails, `PREV_IMAGE` goes back and is verified, and the run still fails. Requests can reach the new image before its checks finish.
+
+Either way, a restored deploy leaves `models/champion.json` naming the new champion. `monitor.yml` reports the version mismatch until you fix and redeploy, or run a model rollback (below). Drill: `gh workflow run deploy.yml -f inject_failure=true`. It fails after all checks pass, so the restore can be observed.
+
+## Migrate to verified releases (`RELEASE_MODE=alias`, one time)
+
+Prerequisite: the ADR-0013 roles are live (`iam.sh` applied, the `AWS_*_ROLE_ARN` secrets set). The legacy `AWS_ROLE_ARN` cannot publish versions or move aliases, and `deploy.yml` refuses alias mode without `AWS_DEPLOY_ROLE_ARN`. In order:
+
+1. `deploy/aws/iam.sh` grants the deploy role `PublishVersion`, `GetAlias` and `UpdateAlias`, and lets it invoke `function:NAME:*`. It lets the monitor role invoke `:live`.
+2. `LIVE=$(aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text)`. This is the image serving now, so the migration does not change what runs.
+3. `LAMBDA_RELEASE_MODE=alias deploy/aws/lambda.sh "$LIVE"`. It publishes a version of `$LIVE`, creates `live` on it, creates the Function URL on `live` (a **new URL**) with its grants, and deletes the unqualified URL, which would expose `$LATEST`, where candidates wait. Callers of the old URL fail from this moment.
+4. `gh secret set FUNCTION_URL` to the URL it prints. `gh variable set RELEASE_MODE --body alias`.
+5. `gh workflow run monitor.yml` must pass against `:live`. Then run a deploy (`gh workflow run deploy.yml`): the summary shows `live: version N -> N+1`, or no move if the image was unchanged.
+6. Prove the no-traffic path once: `gh workflow run deploy.yml -f inject_failure=true`. The summary must show `live` moved back and verified.
+
+To undo: `gh variable set RELEASE_MODE --body latest`, then `deploy/aws/lambda.sh "$LIVE"`. That recreates the unqualified URL, whose address is new again, so set `FUNCTION_URL` again. The alias and versions can stay; nothing reads them in `latest` mode.
 
 ## Rollback (model: back to `previous_version`) (verified 2026-09-23, see PROGRESS)
 
