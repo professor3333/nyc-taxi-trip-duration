@@ -262,6 +262,36 @@ fail is exercised. `tests/test_workflows.py` checks the step order;
 **Cost.** At most 2 images beyond the 5, about 0.2 GB each at $0.10/GB-month:
 under $0.05/month.
 
+## Amendment, 2026-09-24 — the restore handles a failed update
+
+**Finding (external audit, reproduced by simulation).** The restore step ran
+`aws lambda wait function-updated` before restoring. That waiter fails when
+the update ended `Failed`, so the step exited before anything was restored,
+in exactly the case restoration exists for. The `inject_failure` drill fails
+*after* a successful update, so it never covered this path.
+
+**Decision.** `scripts/lambda_restore.py` replaces every raw update waiter in
+`deploy.yml`. `settle` polls `LastUpdateStatus` with a deadline and reports
+how the update ended, including the Failed reason code. `restore` settles,
+then decides. AWS: "the change is aborted and the function's previous code
+and configuration remains in the Active state". Even so, a Failed update is
+followed by an explicit update to PREV. If the function is on the new image,
+it is updated to PREV. If it is already on PREV, nothing happens. If it is
+still InProgress at the deadline, the step fails with the re-run command,
+because Lambda refuses an update while another is running. The restore's own
+update must end Successful on PREV's digest.
+
+**Drill.** `make lambda-update-drill IMAGE=<live digest uri>`
+(`deploy/aws/drill_failed_update.sh`) runs on a scratch function and a scratch
+ECR repository, so the drill image cannot count toward production's
+keep-last-5. It updates the function to the known-good image rebuilt as an
+OCI index with an attestation, a format Lambda rejects. It then runs the
+restore and verifies Active/Successful on the good image and a response. It
+has **not been run yet**. Whether Lambda refuses that image synchronously or
+fails the update asynchronously is exactly what it will show. A synchronous
+refusal is reported as `DRILL INCONCLUSIVE` (exit 2), never as a pass, and the
+Failed path then rests on the simulation tests.
+
 ## Consequences
 
 - The 900 MB image is the main cold-start cost; slimming (no pyarrow at

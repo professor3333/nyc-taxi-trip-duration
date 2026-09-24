@@ -311,7 +311,9 @@ jobs:
           aws lambda update-function-code \
             --function-name "$FN" \
             --image-uri "$IMAGE_URI" >/dev/null
-          aws lambda wait function-updated --function-name "$FN"
+          # Bounded, and says which way it ended (Failed prints its reason);
+          # a Failed update leaves the previous code serving (AWS).
+          uv run python scripts/lambda_restore.py settle --function "$FN"
           RUNNING=$(aws lambda get-function --function-name "$FN" \
             --query Code.ImageUri --output text)
           echo "running: $RUNNING"
@@ -334,7 +336,7 @@ jobs:
           fi
           if [ -z "$CANDIDATE" ]; then
             aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
-            aws lambda wait function-updated-v2 --function-name "$FN"
+            uv run python scripts/lambda_restore.py settle --function "$FN"
             CANDIDATE=$(aws lambda publish-version --function-name "$FN" \
               --description "$RELEASE" --query Version --output text)
             aws lambda wait function-active-v2 --function-name "$FN:$CANDIDATE"
@@ -463,12 +465,13 @@ jobs:
       - name: Restore the previous image
         if: failure() && env.UPDATING == 'true' && env.PREV_IMAGE != '' && env.PREV_IMAGE != env.IMAGE_URI
         run: |
-          echo "::warning::deploy failed after the update; restoring $PREV_IMAGE"
-          aws lambda wait function-updated --function-name "$FN"
-          aws lambda update-function-code --function-name "$FN" --image-uri "$PREV_IMAGE" >/dev/null
-          aws lambda wait function-updated --function-name "$FN"
-          RUNNING=$(aws lambda get-function --function-name "$FN" --query Code.ImageUri --output text)
-          test "$RUNNING" = "$PREV_IMAGE" || { echo "::error::restore failed: running $RUNNING"; exit 1; }
+          echo "::warning::deploy failed after the update began; restoring $PREV_IMAGE"
+          # Not `aws lambda wait function-updated` first: it fails when the
+          # failed deploy's update ended Failed, which exited this step before
+          # anything was restored. lambda_restore.py settles with a deadline,
+          # then decides: Failed or on the new image -> update to PREV;
+          # already on PREV -> nothing; still InProgress -> fail, saying so.
+          uv run python scripts/lambda_restore.py restore --function "$FN" --image "$PREV_IMAGE"
           # Health of what is now serving; its version is whatever PREV was.
           uv run python scripts/deploy_check.py --invoke "$FN" --malformed
           {

@@ -57,6 +57,14 @@ What happens after that depends on the repository variable `RELEASE_MODE`:
 - **`alias`** (verified release). The image becomes a new published version that serves no traffic. It is checked through the Lambda API: cold start, version, fixtures, malformed. Only then does the `live` alias, which the Function URL serves, move to it. If the candidate fails, `live` never changed, and the run summary says "Candidate rejected before release". If something fails after the move (the URL check, or the drill), `live` goes back to `PREV_VERSION`. That version is then verified and the run still fails.
 - **`latest`** (default until the migration below). The function is updated in place and checked afterwards. If a check fails, `PREV_IMAGE` goes back and is verified, and the run still fails. Requests can reach the new image before its checks finish.
 
+In `latest` mode the restore settles the failed update first, with a 300 s deadline, and then decides (`scripts/lambda_restore.py`):
+- **Failed:** AWS aborted it and the previous code kept serving. PREV is re-applied explicitly anyway.
+- **On the new image:** update to PREV.
+- **Already on PREV:** nothing to do.
+- **Still InProgress:** the run fails with the command to re-run once it ends, because no update can start before then.
+
+It never exits at a waiter before deciding. Drill on a scratch function and scratch repository: `make lambda-update-drill IMAGE=<live digest uri>`. It prints `DRILL PASSED`, or `DRILL INCONCLUSIVE` (exit 2) if AWS refuses the drill image synchronously, in which case the Failed path was not produced.
+
 Either way, a restored deploy leaves `models/champion.json` naming the new champion. `monitor.yml` reports the version mismatch until you fix and redeploy, or run a model rollback (below). Drill: `gh workflow run deploy.yml -f inject_failure=true`. It fails after all checks pass, so the restore can be observed.
 
 ## ECR retention (pins)

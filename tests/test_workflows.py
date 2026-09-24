@@ -99,8 +99,11 @@ def test_deploy_scans_before_lambda_changes_and_restores_on_failure() -> None:
         < run.index("UPDATING=true")
         < run.index("update-function-code")
     )
-    assert '--image-uri "$PREV_IMAGE"' in restore["run"]
-    assert 'test "$RUNNING" = "$PREV_IMAGE"' in restore["run"]
+    # settles with a deadline, decides, and verifies PREV (test_lambda_restore)
+    assert (
+        'lambda_restore.py restore --function "$FN" --image "$PREV_IMAGE"'
+        in restore["run"]
+    )
 
 
 def test_deploy_smoke_tests_the_release_image_before_any_lambda_change() -> None:
