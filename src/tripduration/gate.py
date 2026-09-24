@@ -20,6 +20,8 @@ is refused rather than computed on mismatched rows.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -53,6 +55,11 @@ class PromotionPolicy:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def sha256(self) -> str:
+        """Content id of the policy: a gate verdict is valid only under it."""
+        canon = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canon.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

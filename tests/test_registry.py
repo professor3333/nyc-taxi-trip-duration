@@ -10,10 +10,12 @@ from typing import Any
 
 import mlflow
 import pytest
+import yaml
 from mlflow import MlflowClient
 
 from tripduration import registry as reg
 from tripduration.config import Params
+from tripduration.gate import PromotionPolicy
 from tripduration.registry import (
     ChampionState,
     Gate,
@@ -157,25 +159,14 @@ def registry(tmp_path: Path, tiny_artefacts: Path) -> dict[str, Any]:
         )
         return int(mv.version)
 
-    # The recorded gate verdict (scripts/gate_candidate.py) for the month the
-    # versions are tested on; every version here is the same tiny model.
     monitoring = tmp_path / "monitoring"
     monitoring.mkdir()
-    (monitoring / "gate-2024-12.json").write_text(
-        json.dumps(
-            {
-                "verdict": "pass",
-                "reasons": [],
-                "candidate": {"model_md5": reg.file_md5(tiny_artefacts / "model.pkl")},
-            }
-        )
-    )
-
     return {
         "uri": uri,
         "client": client,
         "add": add_version,
         "monitoring": monitoring,
+        "model_md5": reg.file_md5(tiny_artefacts / "model.pkl"),
         "file": tmp_path / "champion.json",
         "log": tmp_path / "promotions.md",
         "meta": tmp_path / "champion_meta.json",
@@ -199,7 +190,45 @@ def _rollback(r: dict[str, Any], **kw: Any) -> ChampionState:
     )
 
 
+POLICY = PromotionPolicy.from_params(yaml.safe_load((ROOT / "params.yaml").read_text()))
+
+
+def _gate_report(
+    r: dict[str, Any],
+    directory: Path | None = None,
+    *,
+    verdict: str = "pass",
+    reasons: tuple[str, ...] = (),
+    **binding: Any,
+) -> Path:
+    """What scripts/gate_candidate.py writes for the tiny candidate against the
+    champion in champion.json now; ``binding`` overrides fields of the record."""
+    directory = directory or r["monitoring"]
+    champ = ChampionState.read(r["files"].champion)
+    assert champ is not None
+    kw: dict[str, Any] = {
+        "candidate_model_md5": r["model_md5"],
+        "candidate_dvc_lock_md5": _tags()["dvc_lock_md5"],
+        "champion_version": champ.version,
+        "champion_model_md5": champ.model_md5,
+        "policy_sha256": POLICY.sha256(),
+        "monitoring_dir": directory,
+    }
+    rep = {
+        "verdict": verdict,
+        "reasons": list(reasons),
+        "binding": reg.gate_binding("2024-12", **{**kw, **binding}),
+    }
+    path = directory / "gate-2024-12.json"
+    path.write_text(json.dumps(rep))
+    return path
+
+
 def _promote(r: dict[str, Any], v: int, **kw: Any) -> ChampionState:
+    """Promote ``v``; unless the test supplies its own evidence, first record a
+    passing gate verdict against the current champion, as the retrain does."""
+    if "monitoring_dir" not in kw and r["files"].champion.exists():
+        _gate_report(r)
     return reg.promote(
         r["uri"],
         v,
@@ -288,6 +317,12 @@ def test_promote_refuses_when_gate_fails_unless_forced(
     assert s.version == v2 and s.reason.startswith("FORCED")
 
 
+def _dir(tmp_path: Path, name: str) -> Path:
+    d = tmp_path / name
+    d.mkdir()
+    return d
+
+
 def test_promote_requires_a_passing_gate_report_for_these_bytes(
     registry: dict[str, Any], tmp_path: Path
 ) -> None:
@@ -296,33 +331,79 @@ def test_promote_requires_a_passing_gate_report_for_these_bytes(
     v1 = r["add"](mae_test_model=4.7)
     v2 = r["add"](mae_test_model=4.5)
     _promote(r, v1)  # first promotion: nothing to compare against, no report needed
-    empty = tmp_path / "no-reports"
-    empty.mkdir()
     with pytest.raises(RegistryError, match="no gate report"):
-        _promote(r, v2, monitoring_dir=empty)
+        _promote(r, v2, monitoring_dir=_dir(tmp_path, "empty"))
 
-    other = tmp_path / "other-model"
-    other.mkdir()
-    rep = json.loads((r["monitoring"] / "gate-2024-12.json").read_text())
-    (other / "gate-2024-12.json").write_text(
-        json.dumps({**rep, "candidate": {"model_md5": "0" * 32}})
-    )
-    with pytest.raises(RegistryError, match="not this version's"):
+    other = _dir(tmp_path, "other-model")
+    _gate_report(r, other, candidate_model_md5="0" * 32)
+    with pytest.raises(RegistryError, match="candidate.model_md5"):
         _promote(r, v2, monitoring_dir=other)
 
-    failed = tmp_path / "failed"
-    failed.mkdir()
-    (failed / "gate-2024-12.json").write_text(
-        json.dumps(
-            {**rep, "verdict": "fail", "reasons": ["slice airport=from_JFK worse"]}
-        )
-    )
+    failed = _dir(tmp_path, "failed")
+    _gate_report(r, failed, verdict="fail", reasons=("slice airport=from_JFK worse",))
     with pytest.raises(RegistryError, match="from_JFK"):
         _promote(r, v2, monitoring_dir=failed)
     assert reg.resolve_alias(r["client"], "champion", MODEL) == v1  # unchanged
 
     s = _promote(r, v2, monitoring_dir=failed, force=True, reason="owner override")
     assert s.version == v2 and "from_JFK" in s.reason and s.reason.startswith("FORCED")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("champion_version", 99),  # judged against a champion since replaced
+        ("champion_model_md5", "9" * 32),  # same number, other bytes
+        ("candidate_dvc_lock_md5", "0" * 32),  # other data / eval outputs
+        ("policy_sha256", "0" * 64),  # policy tightened since the verdict
+    ],
+)
+def test_a_passing_verdict_for_other_evidence_is_stale(
+    registry: dict[str, Any], tmp_path: Path, field: str, value: Any
+) -> None:
+    """The audit repro: a 'pass' for the right candidate md5 but the wrong
+    champion or policy used to be accepted."""
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1)
+    d = _dir(tmp_path, "stale")
+    _gate_report(r, d, **{field: value})
+    with pytest.raises(RegistryError, match="stale"):
+        _promote(r, v2, monitoring_dir=d)
+    assert reg.resolve_alias(r["client"], "champion", MODEL) == v1
+
+
+def test_champion_evidence_edited_after_the_verdict_is_stale(
+    registry: dict[str, Any], tmp_path: Path
+) -> None:
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1)
+    d = _dir(tmp_path, "evidence")
+    (d / "2024-12-slices.csv").write_text("family,slice,n\nday,2024-12-01,10\n")
+    _gate_report(r, d)
+    (d / "2024-12-slices.csv").write_text("family,slice,n\nday,2024-12-01,11\n")
+    with pytest.raises(RegistryError, match="champion.slices_sha256"):
+        _promote(r, v2, monitoring_dir=d)
+
+
+def test_a_report_without_a_binding_is_refused(
+    registry: dict[str, Any], tmp_path: Path
+) -> None:
+    """Pre-binding reports (e.g. the committed gate-2025-0{3,4}.json) name only
+    the candidate; they cannot say what they were judged against."""
+    r = registry
+    v1 = r["add"](mae_test_model=4.7)
+    v2 = r["add"](mae_test_model=4.5)
+    _promote(r, v1)
+    d = _dir(tmp_path, "legacy")
+    (d / "gate-2024-12.json").write_text(
+        json.dumps({"verdict": "pass", "candidate": {"model_md5": r["model_md5"]}})
+    )
+    with pytest.raises(RegistryError, match="no binding"):
+        _promote(r, v2, monitoring_dir=d)
 
 
 def test_promote_refuses_an_improvement_too_small_to_matter(
@@ -493,13 +574,10 @@ def test_artefact_md5_mismatch_is_refused_before_anything_changes(
     bad = r["add"](mae_test_model=4.4, model_md5="0" * 32)
     # A gate report for the md5 the tags claim, so the artefact check (not
     # the gate-report binding) is what refuses.
-    rep = r["monitoring"] / "gate-2024-12.json"
-    rep.write_text(
-        json.dumps({"verdict": "pass", "candidate": {"model_md5": "0" * 32}})
-    )
+    _gate_report(r, candidate_model_md5="0" * 32)
     before = _snapshot(r)
     with pytest.raises(RegistryError, match="model.pkl md5"):
-        _promote(r, bad)
+        _promote(r, bad, monitoring_dir=r["monitoring"])
     assert _snapshot(r) == before
 
 

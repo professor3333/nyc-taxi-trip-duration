@@ -189,3 +189,51 @@ def test_prospective_from_a_different_champion_version_is_ignored(
     r = _run(m, c, d, "2025-02")
     assert r["verdict"] == "fail"
     assert r["champion"]["mae_prospective_on_month"] is None
+
+
+def test_the_report_binds_what_promotion_checks(tmp_path: Path) -> None:
+    """Round trip: the binding gate_candidate.py records is exactly what
+    promote() recomputes for the same candidate, champion, policy and
+    evidence, and stops matching when the champion changes."""
+    from dataclasses import replace
+
+    import yaml
+
+    from tripduration import registry as reg
+    from tripduration.gate import PromotionPolicy
+
+    m = _write(tmp_path, cand=3.40, fb=4.00, month="2025-02")
+    c = _champion(tmp_path, mae=3.79, month="2025-01")
+    doc = json.loads(c.read_text())
+    c.write_text(json.dumps({**doc, "model_md5": "k" * 32}))
+    d = _prospective(tmp_path, month="2025-02", mae=3.62)
+    _slices(tmp_path, "2025-02", cand_noise=0.9)
+    lock = tmp_path / "dvc.lock"
+    lock.write_text(
+        yaml.safe_dump(
+            {
+                "stages": {
+                    "train": {"outs": [{"path": "models/model.pkl", "md5": "c" * 32}]}
+                }
+            }
+        )
+    )
+    r = _run(m, c, d, "2025-02")
+    assert r["verdict"] == "pass"
+    b = r["binding"]
+    assert b["candidate"] == {"model_md5": "c" * 32, "dvc_lock_md5": reg.file_md5(lock)}
+    assert b["champion"]["version"] == 3 and b["champion"]["model_md5"] == "k" * 32
+    assert b["champion"]["prospective_sha256"] and b["champion"]["slices_sha256"]
+
+    policy = PromotionPolicy.from_params(
+        yaml.safe_load((ROOT / "params.yaml").read_text())
+    )
+    challenger = {"test_month": "2025-02", **b["candidate"]}
+    champion = reg.ChampionState(
+        model_name="m", version=3, run_id="", git_sha="", model_md5="k" * 32,
+        fallback_md5="", test_month="2025-01", mae_test_model=3.79,
+        mae_test_fallback=4.0, promoted_at="", previous_version=None, reason="",
+    )  # fmt: skip
+    assert reg.gate_report_reasons(challenger, champion, policy, d) == []
+    moved = reg.gate_report_reasons(challenger, replace(champion, version=4), policy, d)
+    assert any("champion.version=3" in x for x in moved)

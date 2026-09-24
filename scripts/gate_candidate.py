@@ -20,8 +20,11 @@ the policy allows. A missing slice table is a fail, like a missing
 prospective evaluation.
 
 Writes ``reports/monitoring/gate-<month>.json`` and prints a short verdict.
-The report carries the candidate's ``model_md5`` (from ``dvc.lock``), which is
-how ``promote.py`` later ties a registered version to this verdict.
+The report's ``binding`` (``registry.gate_binding``) records what was judged:
+the candidate's ``model_md5`` and ``dvc.lock`` md5, the champion's version and
+model md5, the sha256 of the champion's prospective report and slice table,
+the reference data md5 and the promotion policy's hash. ``promote.py``
+recomputes it and refuses the verdict if anything differs.
 Always exits 0: the verdict is data for the candidate PR, and CI never
 registers or promotes (ADR-0010). A human reads it and runs
 ``make register`` / ``make promote``.
@@ -40,7 +43,7 @@ import pandas as pd
 
 from tripduration.config import load_params
 from tripduration.gate import MismatchedEvaluationError, PromotionPolicy, assess
-from tripduration.registry import dvc_lock_md5s, promotion_gate
+from tripduration.registry import dvc_lock_md5s, file_md5, gate_binding, promotion_gate
 
 
 def main() -> int:
@@ -125,6 +128,17 @@ def main() -> int:
             "mae_prospective_on_month": prospective,
         },
         "safeguards": safeguards,
+        "binding": gate_binding(
+            args.month,
+            candidate_model_md5=lock.get("models/model.pkl"),
+            candidate_dvc_lock_md5=(
+                file_md5(args.dvc_lock) if args.dvc_lock.exists() else None
+            ),
+            champion_version=int(champ["version"]),
+            champion_model_md5=champ.get("model_md5"),
+            policy_sha256=policy.sha256(),
+            monitoring_dir=args.monitoring_dir,
+        ),
         "decided_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     args.monitoring_dir.mkdir(parents=True, exist_ok=True)
