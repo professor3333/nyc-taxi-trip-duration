@@ -4,7 +4,7 @@
     "do_borough"
   ],
   "environment": {
-    "container": "tripduration-train:10f6058c0294@sha256:5bb35ad381e61c035391703496a0ce835c8f8812d340d899107d5b5bee863340",
+    "container": "tripduration-train:16faa498b57c@sha256:e5216a60454254c33a55e95d0154105d7e32078a112ffd223f1eb827835861f2",
     "machine": "x86_64",
     "packages": {
       "numpy": "2.5.3",
@@ -46,15 +46,15 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "d162ffc548ac133ddde8c47ae484cff455214ff6",
+  "git_sha": "492f2090f477cdaa4d28a112e45cf07b493554f1",
   "inputs_md5": {
     "configs/holidays.csv": "63cb7aadeda8ac77ddac8eafac4563f5",
-    "data/processed/train.parquet": "c8a464a33c1db85322a9a6103d57b3fe",
-    "data/processed/val.parquet": "9c64164b93b783d49fd03ddb94eda5f7",
+    "data/processed/train.parquet": "58603560e7870f4ea7d961b88518fea4",
+    "data/processed/val.parquet": "50e5862132e6fa015abb3b6544a1d55f",
     "data/reference/zone_centroids.csv": "79c1bb833dae873054bef4867a70914e",
-    "reports/prepare.json": "648978166c0ce1d59cf830958af3f391"
+    "reports/prepare.json": "a6f5f4828f183e79aac48e2fe4cb174c"
   },
-  "mlflow_run_id": "693aabcf4bf3495ab951b3525679d2fc",
+  "mlflow_run_id": "8ac4e090c0b34c34a223b9911dd2386e",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
@@ -70,22 +70,23 @@
   "seed": 42,
   "sklearn_version": "1.9.1",
   "split_boundaries": {
-    "test": "2025-04",
+    "test": "2025-05",
     "train_first": "2024-10",
-    "train_last": "2025-02",
-    "val": "2025-03"
+    "train_last": "2025-03",
+    "val": "2025-04"
   },
   "target": "duration_min",
-  "test_month": "2025-04",
+  "test_month": "2025-05",
   "train_months": [
     "2024-10",
     "2024-11",
     "2024-12",
     "2025-01",
-    "2025-02"
+    "2025-02",
+    "2025-03"
   ],
-  "train_rows": 17559240,
-  "val_mae_fallback": 3.7391625830155304,
-  "val_mae_model": 3.406976519435697,
-  "val_month": "2025-03"
+  "train_rows": 21538114,
+  "val_mae_fallback": 3.8428047706967434,
+  "val_mae_model": 3.4752810982841904,
+  "val_month": "2025-04"
 }
