@@ -1,6 +1,7 @@
 {
   "added_null_columns": [
-    "cbd_congestion_fee"
+    "cbd_congestion_fee",
+    "request_source"
   ],
   "duration_bands_in_raw": {
     "duration_gt_1440_min": 17,
@@ -31,6 +32,7 @@
     "payment_type": 0.0,
     "pu_location_id": 0.0,
     "ratecode_id": 0.102743,
+    "request_source": 1.0,
     "store_and_fwd_flag": 0.102743,
     "tip_amount": 0.0,
     "tolls_amount": 0.0,
@@ -89,7 +91,7 @@
       "rule": "null_rate_do_location_id"
     },
     {
-      "detail": "10.27% null (ceiling 25%)",
+      "detail": "10.27% null (ceiling 40%)",
       "passed": true,
       "rule": "null_rate_passenger_count"
     },
@@ -146,7 +148,7 @@
     ],
     "max_null_rate": {
       "do_location_id": 0.0,
-      "passenger_count": 0.25,
+      "passenger_count": 0.4,
       "pu_location_id": 0.0,
       "tpep_dropoff_datetime": 0.0,
       "tpep_pickup_datetime": 0.0

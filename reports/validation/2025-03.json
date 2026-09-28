@@ -11,7 +11,9 @@
     "pickup_outside_month": 33,
     "zone_invalid": 28415
   },
-  "missing_optional": [],
+  "missing_optional": [
+    "request_source"
+  ],
   "month": "2025-03",
   "params": {
     "dedupe_key": [
