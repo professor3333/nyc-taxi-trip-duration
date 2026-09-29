@@ -10,7 +10,7 @@
      "Resource": ["arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME", "arn:aws:lambda:AWS_REGION:ACCOUNT_ID:function:LAMBDA_FUNCTION_NAME:*"],
      "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration",
                 "lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig",
-                "lambda:PublishVersion", "lambda:GetAlias", "lambda:UpdateAlias"]},
+                "lambda:PublishVersion", "lambda:ListVersionsByFunction", "lambda:GetAlias", "lambda:UpdateAlias"]},
     {"Sid": "ReleaseLedger", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
      "Resource": "arn:aws:s3:::S3_BUCKET/releases/*"},
     {"Sid": "DvcReadChampion", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],

@@ -143,7 +143,18 @@ def test_monitor_can_probe_but_change_nothing(roles: dict[str, Any]) -> None:
         "lambda:GetFunctionUrlConfig",
         "cloudwatch:PutMetricData",
         "s3:GetObject",  # releases/live.json only: which release is deployed
+        # List only that key, so a missing live.json is NoSuchKey (not seeded)
+        # instead of AccessDenied (monitor run 36533301444 failed on it)
+        "s3:ListBucket",
     }
+    (lst,) = [
+        st
+        for st in roles[ROLE.format("monitor")]["policies"][ROLE.format("monitor")][
+            "Statement"
+        ]
+        if st["Action"] == "s3:ListBucket"
+    ]
+    assert lst["Condition"] == {"StringEquals": {"s3:prefix": "releases/live.json"}}
     (read,) = [
         st
         for st in roles[ROLE.format("monitor")]["policies"][ROLE.format("monitor")][
@@ -314,3 +325,31 @@ def test_monitor_runs_from_main_only() -> None:
     branch, and no push/pull_request trigger could run it elsewhere."""
     triggers = _wf("monitor.yml")[True]  # YAML 1.1 reads `on:` as True
     assert set(triggers) <= {"schedule", "workflow_dispatch"}
+
+
+# `aws lambda <op>` in a workflow -> the IAM action it needs. Seeding the
+# ledger would have failed: #89 added list-versions-by-function to deploy.yml
+# and the fake-AWS tests could not see the missing grant.
+WAITERS = {"wait": {"lambda:GetFunction", "lambda:GetFunctionConfiguration"}}
+
+
+def _cli_actions(workflow: str) -> set[str]:
+    import re
+
+    text = (ROOT / ".github" / "workflows" / workflow).read_text()
+    out: set[str] = set()
+    for op in set(re.findall(r"aws lambda ([a-z-]+)", text)):
+        out |= WAITERS.get(
+            op, {"lambda:" + "".join(w.capitalize() for w in op.split("-"))}
+        )
+    return out
+
+
+@pytest.mark.parametrize(
+    ("workflow", "role"), [("deploy.yml", "deploy"), ("monitor.yml", "monitor")]
+)
+def test_every_lambda_cli_call_in_a_workflow_is_granted(
+    roles: dict[str, Any], workflow: str, role: str
+) -> None:
+    missing = _cli_actions(workflow) - _actions(roles[ROLE.format(role)])
+    assert not missing, f"{role} role lacks {sorted(missing)}"
