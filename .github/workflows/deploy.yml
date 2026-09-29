@@ -43,6 +43,10 @@ on:
         description: "Drill: fail after the checks pass, to prove the automatic restore"
         type: boolean
         default: false
+      reject_candidate:
+        description: "Drill (alias mode): fail the verified candidate BEFORE the alias moves; live must stay untouched"
+        type: boolean
+        default: false
       release_id:
         description: "Restore this recorded release (<release_id>, or <release_id>/<deployment_id>; must be of the selected champion)"
         type: string
@@ -474,6 +478,16 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
           echo "DEPLOYMENT_REF=$REF" >> "$GITHUB_ENV"
           echo "recorded deployment $REF (verified)"
+
+      # Drill for the no-traffic path: the candidate passed its checks and was
+      # recorded as verified; failing here must leave `live` untouched, record
+      # the deployment as activation_failed and put the pins back.
+      - name: Drill - reject the candidate before release
+        if: inputs.reject_candidate
+        run: |
+          [ "$RELEASE_MODE" = "alias" ] || { echo "::error::reject_candidate needs alias mode: in latest mode production has already changed"; exit 1; }
+          echo "::error::injected rejection (workflow_dispatch reject_candidate=true): version ${CANDIDATE:-?} must never receive traffic"
+          exit 1
 
       - name: Keep the cold-start evidence
         if: always() && env.COLD == 'true'

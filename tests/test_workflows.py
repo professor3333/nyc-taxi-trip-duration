@@ -282,3 +282,17 @@ def test_monitor_compares_the_service_with_the_deployed_release() -> None:
     runs = "\n".join(st.get("run", "") for st in job["steps"])
     assert "releases.py status" in runs
     assert '${EXPECT_RELEASE:+--expect-release "$EXPECT_RELEASE"}' in runs
+
+
+def test_the_reject_drill_fails_after_recording_and_before_the_alias_moves() -> None:
+    job = _wf("deploy.yml")["jobs"]["deploy"]
+    names = _steps(job)
+    reject = names.index("Drill - reject the candidate before release")
+    assert (
+        names.index("Record the verified deployment in the ledger")
+        < reject
+        < names.index("Move the live alias to the verified version")
+    )
+    step = job["steps"][reject]
+    assert step["if"] == "inputs.reject_candidate"
+    assert '"$RELEASE_MODE" = "alias"' in step["run"]
