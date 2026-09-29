@@ -30,7 +30,7 @@ services:
     command: >
       mlflow server
       --host 0.0.0.0 --port 5000
-      --backend-store-uri postgresql://${POSTGRES_USER:-mlflow}:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/${POSTGRES_DB:-mlflow}
+      --backend-store-uri postgresql+psycopg2://${POSTGRES_USER:-mlflow}:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/${POSTGRES_DB:-mlflow}
       --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION:-/mlflow/artifacts}
       --serve-artifacts
     ports:
