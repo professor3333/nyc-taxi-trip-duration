@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write   # AWS_CI_ROLE_ARN: a public-ECR pull token only (iam.sh)
 
 # Explicit `shell: bash` runs steps with `-eo pipefail`. The implicit default
 # is `bash -e`, where `cmd | tee log` reports tee's status and a failing cmd
@@ -22,6 +23,8 @@ defaults:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      HAS_CI_ROLE: ${{ secrets.AWS_CI_ROLE_ARN != '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -79,9 +82,28 @@ jobs:
       - name: Train fixture model for the container smoke
         run: uv run python scripts/ci_fixture_model.py --out build/ci-models
 
+      # Base images come from public.ecr.aws, which limits anonymous pulls per
+      # source IP; shared runner IPs exhaust it (429 "Data limit exceeded").
+      # Logged in, pulls use this account's quota. The role can do nothing
+      # else. Missing secret (a fork) or a failed login: anonymous + retry.
+      - name: AWS credentials for public ECR pulls
+        id: ci_aws
+        if: env.HAS_CI_ROLE == 'true'
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Log in to public ECR
+        if: steps.ci_aws.outcome == 'success'
+        run: |
+          aws ecr-public get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin public.ecr.aws \
+            || echo "::warning::public ECR login failed; anonymous pulls (rate-limited per IP)"
+
       - name: Docker build
         run: |
-          docker build \
+          scripts/retry_rate_limited.sh docker build \
             --build-arg MODELS_SRC=build/ci-models \
             --build-arg REFERENCE_SRC=tests/fixtures \
             --build-arg GIT_SHA=${{ github.sha }} \

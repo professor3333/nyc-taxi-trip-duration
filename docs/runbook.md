@@ -227,7 +227,7 @@ TLC answers 403 for a missing key, so a 403 is only "not published" when the mon
 
 ## GitHub OIDC roles (ADR-0013)
 
-`deploy/aws/iam.sh` is idempotent: edit `deploy/aws/iam/gha-<role>-policy.json`, re-run, done. Nothing to rotate in GitHub (no keys). `uv run pytest tests/test_iam.py` checks the trust subjects and that only deploy can change the service.
+`deploy/aws/iam.sh` is idempotent: edit `deploy/aws/iam/gha-<role>-policy.json`, re-run, done. A fifth role, `gha-ci` (secret `AWS_CI_ROLE_ARN`, added 2026-09-29), trusts only this repo's `pull_request` and `refs/heads/main` subjects and can only obtain a public-ECR pull token: anonymous pulls of the Lambda adapter from `public.ecr.aws` hit the per-IP monthly data limit on shared runner IPs (`429 … Data limit exceeded`). CI works without the secret (anonymous pulls plus `scripts/retry_rate_limited.sh`); `deploy.yml` logs in with the deploy role. Nothing to rotate in GitHub (no keys). `uv run pytest tests/test_iam.py` checks the trust subjects and that only deploy can change the service.
 
 **One-time migration from the single legacy role** (owner, with admin credentials):
 

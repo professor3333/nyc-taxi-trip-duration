@@ -195,6 +195,18 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
+      # Base images come from public.ecr.aws (the Lambda adapter). Anonymous
+      # pulls share a per-IP quota with every other job on the runner's IP
+      # and failed with 429 "Data limit exceeded"; logged in, pulls count
+      # against this account's quota. Public ECR auth lives in us-east-1.
+      # Not fatal: without it the build still retries on 429.
+      - name: Log in to public ECR (account pull quota)
+        if: env.PLAN == 'build'
+        run: |
+          aws ecr-public get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin public.ecr.aws \
+            || echo "::warning::public ECR login failed; building with anonymous pulls (rate-limited per IP)"
+
       # The image Lambda runs now, and the pins as they are, recorded before
       # anything is pushed: a failed run puts these pins back.
       - name: Record the serving image and its pins
@@ -241,7 +253,7 @@ jobs:
           elif grep -q ImageNotFoundException <<<"$FOUND"; then
             # Lambda rejects OCI manifests, so buildx must emit Docker v2 media
             # types: --provenance=false --sbom=false + oci-mediatypes=false.
-            docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            scripts/retry_rate_limited.sh docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
               --output type=image,oci-mediatypes=false,push=true \
               --build-arg MODELS_SRC=build/champion/models \
               --build-arg REFERENCE_SRC=build/champion/reference \
