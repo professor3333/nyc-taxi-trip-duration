@@ -1,0 +1,169 @@
+{
+  "added_null_columns": [
+    "request_source"
+  ],
+  "duration_bands_in_raw": {
+    "duration_gt_1440_min": 31,
+    "duration_gt_180_min": 1218,
+    "duration_gt_720_min": 800,
+    "duration_le_0_min": 56064,
+    "duration_lt_1_min": 102270
+  },
+  "duration_percentiles_min": {
+    "p50": 13.717,
+    "p90": 32.367,
+    "p99": 67.767,
+    "p999": 106.736
+  },
+  "failed_rules": [],
+  "month": "2025-07",
+  "null_rate": {
+    "airport_fee": 0.266418,
+    "cbd_congestion_fee": 0.0,
+    "congestion_surcharge": 0.266418,
+    "do_location_id": 0.0,
+    "duration_min": 0.0,
+    "extra": 0.0,
+    "fare_amount": 0.0,
+    "improvement_surcharge": 0.0,
+    "mta_tax": 0.0,
+    "passenger_count": 0.266418,
+    "payment_type": 0.0,
+    "pu_location_id": 0.0,
+    "ratecode_id": 0.266418,
+    "request_source": 1.0,
+    "store_and_fwd_flag": 0.266418,
+    "tip_amount": 0.0,
+    "tolls_amount": 0.0,
+    "total_amount": 0.0,
+    "tpep_dropoff_datetime": 0.0,
+    "tpep_pickup_datetime": 0.0,
+    "trip_distance": 0.0,
+    "vendor_id": 0.0
+  },
+  "passed": true,
+  "raw": "data/raw/yellow/2025-07.parquet",
+  "reject_rate": 0.0496,
+  "renamed": {
+    "Airport_fee": "airport_fee",
+    "DOLocationID": "do_location_id",
+    "PULocationID": "pu_location_id",
+    "RatecodeID": "ratecode_id",
+    "VendorID": "vendor_id"
+  },
+  "rows_raw": 3898963,
+  "rows_valid": 3705574,
+  "rules": [
+    {
+      "detail": "3,898,963 rows (minimum 1,000,000); fewer means a truncated file",
+      "passed": true,
+      "rule": "enough_raw_rows"
+    },
+    {
+      "detail": "3,705,574 valid rows (minimum 500,000)",
+      "passed": true,
+      "rule": "enough_valid_rows"
+    },
+    {
+      "detail": "4.96% rejected by ADR-0002 (ceiling 10%)",
+      "passed": true,
+      "rule": "reject_rate_within_bounds"
+    },
+    {
+      "detail": "0.00% null (ceiling 0%)",
+      "passed": true,
+      "rule": "null_rate_tpep_pickup_datetime"
+    },
+    {
+      "detail": "0.00% null (ceiling 0%)",
+      "passed": true,
+      "rule": "null_rate_tpep_dropoff_datetime"
+    },
+    {
+      "detail": "0.00% null (ceiling 0%)",
+      "passed": true,
+      "rule": "null_rate_pu_location_id"
+    },
+    {
+      "detail": "0.00% null (ceiling 0%)",
+      "passed": true,
+      "rule": "null_rate_do_location_id"
+    },
+    {
+      "detail": "26.64% null (ceiling 40%)",
+      "passed": true,
+      "rule": "null_rate_passenger_count"
+    },
+    {
+      "detail": "pickup 1-265, dropoff 1-265 (TLC ids are 1-265)",
+      "passed": true,
+      "rule": "zone_ids_in_range"
+    },
+    {
+      "detail": "median trip 13.717 min (expected 5.0-30.0)",
+      "passed": true,
+      "rule": "median_duration_plausible"
+    },
+    {
+      "detail": "p99 trip 67.767 min (expected 30.0-180.0)",
+      "passed": true,
+      "rule": "p99_duration_plausible"
+    },
+    {
+      "detail": "busiest zone pair is 0.47% of rows (ceiling 5%)",
+      "passed": true,
+      "rule": "no_dominant_zone_pair"
+    }
+  ],
+  "source_schema": {
+    "Airport_fee": "double",
+    "DOLocationID": "int32",
+    "PULocationID": "int32",
+    "RatecodeID": "int64",
+    "VendorID": "int32",
+    "cbd_congestion_fee": "double",
+    "congestion_surcharge": "double",
+    "extra": "double",
+    "fare_amount": "double",
+    "improvement_surcharge": "double",
+    "mta_tax": "double",
+    "passenger_count": "int64",
+    "payment_type": "int64",
+    "store_and_fwd_flag": "large_string",
+    "tip_amount": "double",
+    "tolls_amount": "double",
+    "total_amount": "double",
+    "tpep_dropoff_datetime": "timestamp[us]",
+    "tpep_pickup_datetime": "timestamp[us]",
+    "trip_distance": "double"
+  },
+  "thresholds": {
+    "duration_p50_bounds": [
+      5.0,
+      30.0
+    ],
+    "duration_p99_bounds": [
+      30.0,
+      180.0
+    ],
+    "max_null_rate": {
+      "do_location_id": 0.0,
+      "passenger_count": 0.4,
+      "pu_location_id": 0.0,
+      "tpep_dropoff_datetime": 0.0,
+      "tpep_pickup_datetime": 0.0
+    },
+    "max_reject_rate": 0.1,
+    "max_share_single_zone_pair": 0.05,
+    "min_rows_raw": 1000000,
+    "min_rows_valid": 500000
+  },
+  "top_zone_pair_share": 0.004708,
+  "validated": "data/validated/2025-07.parquet",
+  "zone_range": {
+    "do_max": 265,
+    "do_min": 1,
+    "pu_max": 265,
+    "pu_min": 1
+  }
+}
