@@ -68,7 +68,7 @@ remote is the private S3 bucket — without access, `make ingest` rebuilds the
 raw layer from TLC's public files and the md5s in `reports/ingest/` confirm
 it is the same data.
 
-## 2. Registry rollback — MET locally; live half pending (Phase 6)
+## 2. Registry rollback — MET (local and live; verified-release path drilled 2026-09-29)
 
 **Claim.** Registry holds ≥ 2 versions; `docs/promotions.md` records a
 promotion to N and a rollback to N−1; live `/health` reported N then N−1.
@@ -109,6 +109,26 @@ had been corrupted by a test: `/health` reported
 list mismatch…"}` and the service kept answering from the lookup table. That
 is criterion 2's real value — the pointer, the artefacts and the running
 service disagreed, and the system said so instead of serving a wrong model.
+**Proof (live, verified releases, 2026-09-29).** After the ADR-0013 role
+migration and the switch to `deploy/release_mode = alias`, every release path
+was run on AWS. Run URLs are `https://github.com/professor3333/nyc-taxi-trip-duration/actions/runs/<id>`.
+
+| # | Scenario | Run | Outcome |
+|---|---|---|---|
+| seed | first verified release of v1 (release `2568244c…`, image `694310af…`) | 36535411403 | version 2 published with no traffic, cold start proven (`requests_before=0`, 15.7 s), 80/80 fixture, ledger `verified` → alias 1→2 → URL check → `activated` |
+| 1 | candidate rejected before release (`fresh_build`, `reject_candidate`) | 36543298235 | version 3 verified and recorded, then rejected; "live stayed on version 2"; ledger `activation_failed` |
+| 2 | failure after activation (`fresh_build`, `inject_failure`) | 36543987031 | alias 2→4, URL check passed, injected failure → alias back to 2 and re-verified; ledger `activation_failed` |
+| 3 | rollback to an existing, warm version (`release_id=<ref of version 2>`, after version 5 went live in 36544784940) | 36545501707 | nothing rebuilt; version 2 re-used (`new: false`), **no cold-start demand**; release id and recorded predictions 80/80 at tolerance 0 (direct and URL); alias 5→2 |
+| 4 | redeploy of the digest already live | 36546129591 | image `694310af…` reused; Lambda published version 6 (it compares with the last published version), cold start proven; pins kept `694310af…` **and** the rollback target `5c1b0211…` |
+
+Final state, read from AWS: alias `live` → 6; exactly two images pinned
+(`694310af…` live, `5c1b0211…` rollback target); ledger records
+`…-2-…` verified/activated ×2, `…-3-…` and `…-4-…` activation_failed,
+`…-5-…` and `…-6-…` activated; `releases/live.json` → `…-6-…`. Monitor run
+36547010766 green, with selected (`champion.json` v1) = deployed
+(`live.json` v1). Drills 3 and 4 are the live counterparts of review defects
+1 and 2 (ADR-0014 amendment 2026-09-29).
+
 ## 3. CI blocks a broken build — MET
 
 **Branch protection on `main`** (set 2026-09-22 via `gh api`): required status
