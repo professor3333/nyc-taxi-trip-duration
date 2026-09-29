@@ -2,6 +2,7 @@
   "Version": "2012-10-17",
   "Statement": [
     {"Sid": "EcrAuth", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+    {"Sid": "PublicEcrPull", "Effect": "Allow", "Action": ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"], "Resource": "*"},
     {"Sid": "EcrPush", "Effect": "Allow", "Resource": "arn:aws:ecr:AWS_REGION:ACCOUNT_ID:repository/ECR_REPOSITORY",
      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload",
                 "ecr:PutImage", "ecr:UploadLayerPart", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:DescribeImages",

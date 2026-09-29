@@ -81,7 +81,7 @@ jobs:
 
       - name: Docker build
         run: |
-          docker build \
+          scripts/retry_rate_limited.sh docker build \
             --build-arg MODELS_SRC=build/ci-models \
             --build-arg REFERENCE_SRC=tests/fixtures \
             --build-arg GIT_SHA=${{ github.sha }} \
