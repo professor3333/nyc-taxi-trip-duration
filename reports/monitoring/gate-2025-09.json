@@ -1,0 +1,125 @@
+{
+  "month": "2025-09",
+  "verdict": "fail",
+  "reasons": [
+    "challenger MAE 4.2773 not below champion prospective on 2025-09 4.2462",
+    "improvement -0.73% is below the 1.0% minimum worth a release",
+    "improvement not distinguishable from zero: 95% day-block interval [-2.52%, +1.30%] over 30 days",
+    "slice airport=from_LGA (n=102628) worse by +6.1%: 6.282 -> 6.666 (limit +3.0%)",
+    "slice period=weekend_or_holiday_evening (n=247214) worse by +5.2%: 3.559 -> 3.742 (limit +3.0%)",
+    "slice route=237->142 (n=6752) worse by +5.0%: 3.361 -> 3.529 (limit +3.0%)",
+    "slice borough_pair=Bronx->Manhattan (n=13523) worse by +4.8%: 10.823 -> 11.337 (limit +3.0%)",
+    "slice period=weekend_or_holiday_pm_peak (n=286879) worse by +4.6%: 4.243 -> 4.437 (limit +3.0%)",
+    "slice route=186->230 (n=7518) worse by +3.9%: 5.166 -> 5.367 (limit +3.0%)",
+    "slice route=142->237 (n=6782) worse by +3.3%: 3.271 -> 3.378 (limit +3.0%)"
+  ],
+  "candidate": {
+    "mae_test_model": 4.27726285736159,
+    "mae_test_fallback": 4.702587813393493,
+    "train_months": [
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06",
+      "2025-07"
+    ],
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "model_md5": "905bcb4360ccb9da53b8aef8feafddcd"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 4.2462245837444765
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": -0.007309616579380673,
+      "lower": -0.025213827017733868,
+      "upper": 0.013016482673616596,
+      "days": 30
+    },
+    "slices_checked": 57,
+    "slices_regressed": 7,
+    "worst_slices": [
+      {
+        "family": "airport",
+        "slice": "from_LGA",
+        "n": 102628,
+        "mae_champion": 6.281699250210863,
+        "mae_candidate": 6.666261179025148,
+        "ratio": 1.061219411101443,
+        "regressed": true
+      },
+      {
+        "family": "period",
+        "slice": "weekend_or_holiday_evening",
+        "n": 247214,
+        "mae_champion": 3.558977021878372,
+        "mae_candidate": 3.742376240760977,
+        "ratio": 1.0515314422529791,
+        "regressed": true
+      },
+      {
+        "family": "route",
+        "slice": "237->142",
+        "n": 6752,
+        "mae_champion": 3.360574531785348,
+        "mae_candidate": 3.528954794576,
+        "ratio": 1.050104605982715,
+        "regressed": true
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Bronx->Manhattan",
+        "n": 13523,
+        "mae_champion": 10.823154822758475,
+        "mae_candidate": 11.337292990417826,
+        "ratio": 1.0475035399639894,
+        "regressed": true
+      },
+      {
+        "family": "period",
+        "slice": "weekend_or_holiday_pm_peak",
+        "n": 286879,
+        "mae_champion": 4.242897257164089,
+        "mae_candidate": 4.437095267653663,
+        "ratio": 1.0457701421267442,
+        "regressed": true
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2025-09",
+    "candidate": {
+      "model_md5": "905bcb4360ccb9da53b8aef8feafddcd",
+      "dvc_lock_md5": "6f9406c9c8da288cbdc7784b7bf8330c"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "71dd4aa57e1b2751ecd9ff0725dc254e8328be0cf2287eba76b43e6897f967ab",
+      "slices_sha256": "af4da40eb129a66723abde5a7c4871d205dbbcd6b546e55ceb22ed4b467a0334"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-29T10:16:32+00:00"
+}
