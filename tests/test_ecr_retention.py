@@ -277,3 +277,35 @@ def test_check_requires_rule_pin_and_a_clean_preview(
 
     ecr = FakeECR([_release(3, pinned=pinned)], policy, {_d(n) for n in expiring})
     assert (check(ecr, "r", [_d(3)]) == 0) is ok
+
+
+def test_a_no_change_redeploy_keeps_the_rollback_target_pinned() -> None:
+    """Review 2026-09-29: B live, A its pinned rollback target; redeploying B
+    unchanged used to pin exactly {B, B} and unpin A."""
+    from ecr_retention import pin, release_pins
+
+    a, b = _d(1), _d(2)
+    ecr = FakeECR([_release(1, pinned=True), _release(2, pinned=True)], POLICY, set())
+    repo = f"1.dkr.ecr.us-east-1.amazonaws.com/r@{b}"
+
+    keep = release_pins(repo, repo, old=[a, b])
+    assert pin(ecr, "r", keep, exact=True) == 0
+    assert pin_tag(a) in ecr.images[a] and pin_tag(b) in ecr.images[b]
+
+    # a genuine release C then advances the pair: {C, B}, and A is released
+    ecr.images[_d(3)] = [f"v1-{3:040x}"]
+    ecr.pushed[_d(3)] = 3.0
+    keep = release_pins(_d(3), repo, old=[a, b])
+    assert keep == [_d(3), b]
+    assert pin(ecr, "r", keep, exact=True) == 0
+    assert pin_tag(a) not in ecr.images[a]
+
+
+def test_the_workflow_computes_pins_from_the_transition() -> None:
+    import yaml
+
+    steps = yaml.safe_load((ROOT / ".github/workflows/deploy.yml").read_text())["jobs"][
+        "deploy"
+    ]["steps"]
+    (step,) = [s for s in steps if s.get("name", "").startswith("Keep pins")]
+    assert "release-pins" in step["run"] and "$OLD_PINS" in step["run"]

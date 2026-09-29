@@ -181,10 +181,12 @@ supersedes it on current `main`.
    fail (unavailable, `/ready` 503); expecting v3 from the v1 image, the
    version check fails.
 2. **Publish a candidate version, verify it, then move an alias**
-   (`RELEASE_MODE=alias`). `$LATEST` takes the new code, `publish-version`
+   (`RELEASE_MODE=alias`; since 2026-09-29 the committed file
+   `deploy/release_mode` is the one source, read by lambda.sh, deploy.yml and
+   monitor.yml). `$LATEST` takes the new code, `publish-version`
    freezes it as version N, and N's resolved image must equal the pushed
-   digest. `deploy_check --invoke fn:N` runs the cold-start, version, fixture
-   and malformed checks with no traffic, because callers reach only `live`
+   digest. `deploy_check --invoke fn:N` runs the version, fixture and malformed
+   checks, plus the cold-start check when N is newly created, with no traffic, because callers reach only `live`
    (its Function URL) and `monitor.yml` probes `live`. After that,
    `update-alias live → N`, then the URL check. A failure before the move
    leaves production untouched. A failure after it moves `live` back to the

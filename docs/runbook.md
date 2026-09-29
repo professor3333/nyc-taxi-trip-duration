@@ -52,9 +52,9 @@ uv run python scripts/deploy_check.py --url "$URL" --sigv4 --expect-version v<n>
 
 Every deploy first runs the exact pushed image on the runner with the real champion baked in: the model must load (a degraded `/health` fails), `/ready` must pass, all 80 `champion_fixture.csv` predictions must match, and malformed input must be a 422. A vulnerable image (Trivy: CRITICAL/HIGH with a fix) or a failed smoke test stops the run before Lambda changes.
 
-What happens after that depends on the repository variable `RELEASE_MODE`:
+What happens after that depends on the release mode, the committed file `deploy/release_mode` (`latest` or `alias`). It is the one source: `deploy.yml`, `monitor.yml` and `deploy/aws/lambda.sh` all read it, `lambda.sh` refuses an environment override that disagrees, and `deploy.yml` fails if AWS does not match it (alias mode with an unqualified URL, or latest mode without one):
 
-- **`alias`** (verified release). The image becomes a new published version that serves no traffic. It is checked through the Lambda API: cold start, version, fixtures, malformed. Only then does the `live` alias, which the Function URL serves, move to it. If the candidate fails, `live` never changed, and the run summary says "Candidate rejected before release". If something fails after the move (the URL check, or the drill), `live` goes back to `PREV_VERSION`. That version is then verified and the run still fails.
+- **`alias`** (verified release). The image becomes a new published version that serves no traffic. It is checked through the Lambda API: version, fixtures, malformed, and the cold start when the version is new. A version that already existed (a restore of the recorded version, or `publish-version` returning the existing one for unchanged code) may have warm environments, so it is verified by release id, `/ready` and the recorded predictions instead. Only then does the `live` alias, which the Function URL serves, move to it. If the candidate fails, `live` never changed, and the run summary says "Candidate rejected before release". If something fails after the move (the URL check, or the drill), `live` goes back to `PREV_VERSION`. That version is then verified and the run still fails.
 - **`latest`** (default until the migration below). The function is updated in place and checked afterwards. If a check fails, `PREV_IMAGE` goes back and is verified, and the run still fails. Requests can reach the new image before its checks finish.
 
 In `latest` mode the restore settles the failed update first, with a 300 s deadline, and then decides (`scripts/lambda_restore.py`):
@@ -84,12 +84,12 @@ Prerequisite: the ADR-0013 roles are live (`iam.sh` applied, the `AWS_*_ROLE_ARN
 
 1. `deploy/aws/iam.sh` grants the deploy role `PublishVersion`, `GetAlias` and `UpdateAlias`, and lets it invoke `function:NAME:*`. It lets the monitor role invoke `:live`.
 2. `LIVE=$(aws lambda get-function --function-name nyc-taxi-trip-duration --query Code.ResolvedImageUri --output text)` (on 2026-09-24: `…@sha256:41b43311…`, v1). This is the image serving now, so the migration does not change what runs.
-3. `LAMBDA_RELEASE_MODE=alias deploy/aws/lambda.sh "$LIVE"`. It publishes a version of `$LIVE`, creates `live` on it, creates the Function URL on `live` (a **new URL**) with its grants, and deletes the unqualified URL, which would expose `$LATEST`, where candidates wait. Callers of the old URL fail from this moment.
-4. `gh secret set FUNCTION_URL` to the URL it prints. `gh variable set RELEASE_MODE --body alias`.
+3. On a branch, `printf 'alias\n' > deploy/release_mode`, then `deploy/aws/lambda.sh "$LIVE"` from that checkout. It publishes a version of `$LIVE`, creates `live` on it, creates the Function URL on `live` (a **new URL**) with its grants, and deletes the unqualified URL, which would expose `$LATEST`, where candidates wait. Callers of the old URL fail from this moment. Every later `lambda.sh` run reads the same file, so it keeps the unqualified URL absent.
+4. `gh secret set FUNCTION_URL` to the URL it prints. Commit `deploy/release_mode`, open the PR and merge it now: until it is on `main`, `monitor.yml` still probes the deleted unqualified URL and goes red. (The old repository variable `RELEASE_MODE` is no longer read; delete it with `gh variable delete RELEASE_MODE` if it exists.)
 5. `gh workflow run monitor.yml` must pass against `:live`. Then run a deploy (`gh workflow run deploy.yml`): the summary shows `live: version N -> N+1`, or no move if the image was unchanged.
 6. Prove the no-traffic path once: `gh workflow run deploy.yml -f inject_failure=true`. The summary must show `live` moved back and verified.
 
-To undo: `gh variable set RELEASE_MODE --body latest`, then `deploy/aws/lambda.sh "$LIVE"`. That recreates the unqualified URL, whose address is new again, so set `FUNCTION_URL` again. The alias and versions can stay; nothing reads them in `latest` mode.
+To undo: `printf 'latest\n' > deploy/release_mode`, `deploy/aws/lambda.sh "$LIVE"`, commit and merge. That recreates the unqualified URL, whose address is new again, so set `FUNCTION_URL` again, and deletes the URL on `live` with its grants, so exactly one URL exists. The alias and versions can stay; nothing reads them in `latest` mode.
 
 ## Rollback (model: back to `previous_version`) (verified 2026-09-23, see PROGRESS)
 
@@ -107,21 +107,23 @@ gh pr checks --watch && gh pr merge --squash --delete-branch
 git switch main && git pull
 ```
 
-`make rollback` writes `"action": "rollback"` into `champion.json`. When that lands on `main`, `deploy.yml` **restores** the most recent verified release of v<m> from the ledger (`s3://<bucket>/releases/`, ADR-0014). It is that image, re-activated through its own Lambda version when that version still runs the image, and it must report the recorded `release_id` and reproduce the predictions it served at tolerance 0. Nothing is rebuilt: an old model rebuilt with today's code, dependencies or holidays is a different release (measured 2026-09-24: v1 with one extra holiday changed 40 of the 80 fixture predictions, by up to 23.8 min).
+`make rollback` writes `"action": "rollback"` into `champion.json`. When that lands on `main`, `deploy.yml` **restores** the most recently *activated* deployment of v<m> from the ledger (`s3://<bucket>/releases/`, ADR-0014); a candidate whose activation failed is never chosen. It is that image, re-activated through its own Lambda version when that version still runs the image. If the version is gone, a replacement is published only when `$LATEST`'s configuration (memory, timeout, environment, ephemeral storage, architecture, image config) equals the recorded one; otherwise the run stops before changing anything. The same check guards a restore in `latest` mode. It must report the recorded `release_id` and reproduce the predictions it served at tolerance 0. Nothing is rebuilt: an old model rebuilt with today's code, dependencies or holidays is a different release (measured 2026-09-24: v1 with one extra holiday changed 40 of the 80 fixture predictions, by up to 23.8 min).
 
 The deploy fails instead of rebuilding when:
-- no verified release of v<m> is recorded. It was never deployed after the ledger existed, or the deploy ran on the legacy role.
+- no successfully activated deployment of v<m> is recorded. It was never deployed after the ledger existed, or the deploy ran on the legacy role.
 - the recorded image has expired from ECR. Only the live release and its rollback target are pinned.
 - the role cannot read the ledger.
 
-In each case the run says which. If you accept a *new* release of that model, built from today's code, verified and recorded as new: `gh workflow run deploy.yml -f rebuild=true`. To restore one specific recorded release of the selected champion: `gh workflow run deploy.yml -f release_id=<id>`. A failed deploy can simply be re-run: the same release content reuses its already-pushed image (tag `<version>-<release id>`), and `-f fresh_build=true` forces a new image under a run-unique tag.
+In each case the run says which. If you accept a *new* release of that model, built from today's code, verified and recorded as new: `gh workflow run deploy.yml -f rebuild=true`. To restore one specific recorded release of the selected champion: `gh workflow run deploy.yml -f release_id=<id>` (its most recently activated deployment), or `-f release_id=<id>/<deployment id>` for exactly that deployment, even one never activated (the run warns). A failed deploy can simply be re-run: the same release content reuses its already-pushed image (tag `<version>-<release id>`), and `-f fresh_build=true` forces a new image under a run-unique tag.
 
 Then watch `deploy.yml` and run the signed `deploy_check` exactly as in *Release*, with `--expect-version v<m>`. `make release-status BUCKET=<bucket>` shows the **selected** champion (`champion.json`) next to the **deployed** release (`releases/live.json`). They differ while a deploy is pending, or after one failed. If the registry is unreachable, edit `champion.json` by hand from the previous row of `docs/promotions.md` (version, git_sha, md5s, `"action": "rollback"`); the deploy needs only that file and the ledger. The manual edit is a last resort.
 
 ## Release ledger (ADR-0014)
 
-- `releases/<release_id>.json` holds a verified release: its manifest (model, references, code, environment and config by hash), image digest, Lambda version, run URL, and the predictions it served on the 80-row grid, plus a history of every verification. It is written before traffic in alias mode. A release that cannot be recorded does not go live.
-- `releases/live.json` is the deployed release. It is written only after activation succeeded, so a failed deploy never moves it.
+- `releases/deployments/<release_id>/<deployment_id>.json` is one **deployment** of a release: the manifest (model, references, code, environment and config by hash), the image digest, the Lambda version (or `latest`), the Lambda configuration snapshot, and the predictions *it* served on the 80-row grid. `deployment_id` = `<digest 16 hex>-<version|latest>-<config sha 8>`, so a `fresh_build`, a republished version or a configuration change is a separate record and nothing a restore replays is overwritten; `put` refuses changed evidence for an existing deployment.
+- Each deployment has events: `verified` (written after the Lambda-API check, before traffic in alias mode; a deployment that cannot be recorded does not go live), `activated` (after the alias move, the URL check and the drill step) and `activation_failed` (any failure after `verified`). A rollback picks the most recent `activated` deployment whose last event is not a failure.
+- `releases/live.json` is the deployed deployment. It is written only on activation, so a failed deploy never moves it.
+- Inspect: `aws s3 ls s3://<bucket>/releases/deployments/ --recursive`.
 - `/version` reports `release_id`. `monitor.yml` requires the service to report the release `live.json` names.
 - **Seeding (once, after the iam.sh migration):** nothing is recorded yet. Run one normal deploy of the current champion (`gh workflow run deploy.yml`). Until a model has a recorded release, a rollback to it fails loudly.
 
@@ -238,10 +240,10 @@ gh workflow run reproduce.yml -f mode=verify        # approve it; proves the rep
 # the next deploy.yml / retrain.yml run proves those two
 deploy/aws/iam.sh --retire-legacy                   # deletes nyc-taxi-trip-duration-github-actions
 gh secret delete AWS_ROLE_ARN
-deploy/aws/lambda.sh <live image uri>               # drops the legacy role's URL grant
+deploy/aws/lambda.sh <live image uri>               # revokes the legacy role's URL grants (it no longer exists)
 ```
 
-Then remove the `|| secrets.AWS_ROLE_ARN` fallbacks from the four workflows. `tests/test_iam.py` still passes; the fallback is not asserted.
+`lambda.sh` grants the URL to the legacy role only while `aws iam get-role` finds it; once it answers `NoSuchEntity`, the `github-actions-url`/`github-actions-invoke` statements are revoked from the URL's qualifier and from the unqualified function. The four new roles need no resource-policy grant: their identity policies carry `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction`, which is enough in-account with `AWS_IAM`. Any other `get-role` error stops the script. Then remove the `|| secrets.AWS_ROLE_ARN` fallbacks from the four workflows. `tests/test_iam.py` still passes; the fallback is not asserted.
 
 ## Restore from a fresh clone
 

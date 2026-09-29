@@ -32,6 +32,9 @@ MUTATING = (
     "add-permission",
     "remove-permission",
     "subscribe",
+    "delete-function-url-config",
+    "publish-version",
+    "create-alias",
 )
 
 pytestmark = pytest.mark.skipif(
@@ -81,6 +84,19 @@ def fail(msg):
 def need_fn():
     if fn is None: fail("ResourceNotFoundException: function")
 
+def scope():
+    # URL + resource policy of the unqualified function, or of an alias
+    q = args.get("qualifier")
+    if not q:
+        return fn
+    if q not in fn.setdefault("aliases", {}):
+        fail("ResourceNotFoundException: alias " + q)
+    return fn.setdefault("q", {}).setdefault(q, {"url": None, "policy": []})
+
+if service == "iam":
+    if op == "get-role":
+        if state.get("legacy_role", True): done({"Role": {}})
+        fail("An error occurred (NoSuchEntity) when calling the GetRole operation")
 if service == "lambda":
     if op == "wait" or op == "put-function-concurrency":
         done()
@@ -111,35 +127,62 @@ if service == "lambda":
         uri = args["image-uri"]
         fn["code"] = {"ImageUri": uri, "ResolvedImageUri": uri}
         done({})
+    if op == "publish-version":
+        need_fn()
+        versions = fn.setdefault("versions", {})
+        n = str(len(versions) + 1)
+        versions[n] = fn["code"]["ResolvedImageUri"]
+        done({"Version": n})
+    if op == "get-alias":
+        need_fn()
+        if args["name"] not in fn.get("aliases", {}):
+            fail("ResourceNotFoundException: alias")
+        done({"FunctionVersion": fn["aliases"][args["name"]]})
+    if op == "create-alias":
+        need_fn()
+        fn.setdefault("aliases", {})[args["name"]] = args["function-version"]
+        done({})
     if op == "get-function-url-config":
         need_fn()
-        if not fn["url"]: fail("ResourceNotFoundException: url")
-        done(fn["url"])
+        sc = scope()
+        if not sc["url"]: fail("ResourceNotFoundException: url")
+        done(sc["url"])
     if op in ("create-function-url-config", "update-function-url-config"):
         need_fn()
-        if (op == "create-function-url-config") == bool(fn["url"]):
+        sc = scope()
+        if (op == "create-function-url-config") == bool(sc["url"]):
             fail("wrong url state for " + op)
-        fn["url"] = {"AuthType": args["auth-type"],
-                     "FunctionUrl": "https://fake.lambda-url/"}
+        where = args.get("qualifier", "unqualified")
+        sc["url"] = {"AuthType": args["auth-type"],
+                     "FunctionUrl": f"https://fake-{where}.lambda-url/"}
         done({})
+    if op == "delete-function-url-config":
+        need_fn()
+        sc = scope()
+        if not sc["url"]: fail("ResourceNotFoundException: url")
+        sc["url"] = None
+        done()
     if op == "get-policy":
         need_fn()
-        if not fn["policy"]: fail("ResourceNotFoundException: policy")
-        done({"Policy": json.dumps({"Statement": fn["policy"]})})
+        sc = scope()
+        if not sc["policy"]: fail("ResourceNotFoundException: policy")
+        done({"Policy": json.dumps({"Statement": sc["policy"]})})
     if op == "add-permission":
         need_fn()
-        if any(s["Sid"] == args["statement-id"] for s in fn["policy"]):
+        sc = scope()
+        if any(s["Sid"] == args["statement-id"] for s in sc["policy"]):
             fail("ResourceConflictException: sid")
-        fn["policy"].append({"Sid": args["statement-id"], "Action": args["action"],
+        sc["policy"].append({"Sid": args["statement-id"], "Action": args["action"],
                              "Principal": args["principal"],
                              "ViaUrl": bool(args.get("invoked-via-function-url")),
                              "UrlAuth": args.get("function-url-auth-type")})
         done({})
     if op == "remove-permission":
         need_fn()
-        before = len(fn["policy"])
-        fn["policy"] = [s for s in fn["policy"] if s["Sid"] != args["statement-id"]]
-        if len(fn["policy"]) == before: fail("ResourceNotFoundException: sid")
+        sc = scope()
+        before = len(sc["policy"])
+        sc["policy"] = [s for s in sc["policy"] if s["Sid"] != args["statement-id"]]
+        if len(sc["policy"]) == before: fail("ResourceNotFoundException: sid")
         done()
 if service == "logs":
     done()
@@ -173,11 +216,15 @@ def aws(tmp_path: Path):
         json.dumps({"function": None, "subscribers": [], "calls": []})
     )
 
+    mode_file = tmp_path / "release_mode"
+    mode_file.write_text("latest\n")
+
     def run(**overrides: str) -> tuple[dict, str]:
         state = json.loads(state_file.read_text())
         state["calls"] = []
         state_file.write_text(json.dumps(state))
         image = overrides.pop("IMAGE", IMAGE)
+        expect_fail = overrides.pop("EXPECT_FAIL", "") == "1"
         env = {k: v for k, v in os.environ.items() if not k.startswith("LAMBDA_")}
         env.update(
             PATH=f"{bin_dir}{os.pathsep}{env['PATH']}",
@@ -187,13 +234,25 @@ def aws(tmp_path: Path):
             GITHUB_REPO_ID="2",
             BUDGET_EMAIL="alerts@example.com",
             AWS_REGION="us-east-1",
+            RELEASE_MODE_FILE=str(mode_file),
             **overrides,
         )
         proc = subprocess.run(
             ["bash", str(LAMBDA_SH), image], env=env, capture_output=True, text=True
         )
+        if expect_fail:
+            assert proc.returncode != 0, proc.stdout
+            return json.loads(state_file.read_text()), proc.stderr
         assert proc.returncode == 0, proc.stdout + proc.stderr
         return json.loads(state_file.read_text()), proc.stdout
+
+    def set_mode(mode: str) -> None:
+        mode_file.write_text(mode + "\n")
+
+    def retire_legacy_role() -> None:
+        state = json.loads(state_file.read_text())
+        state["legacy_role"] = False
+        state_file.write_text(json.dumps(state))
 
     def seed(function: dict) -> None:
         state = json.loads(state_file.read_text())
@@ -201,6 +260,8 @@ def aws(tmp_path: Path):
         state_file.write_text(json.dumps(state))
 
     run.seed = seed  # type: ignore[attr-defined]
+    run.set_mode = set_mode  # type: ignore[attr-defined]
+    run.retire_legacy_role = retire_legacy_role  # type: ignore[attr-defined]
     return run
 
 
@@ -303,6 +364,105 @@ def test_new_image_updates_code_only(aws) -> None:
     state, out = aws(IMAGE=IMAGE2)
     assert _mutations(state) == ["update-function-code"]
     assert state["function"]["code"]["ImageUri"] == IMAGE2
+
+
+def _live(state: dict) -> dict:
+    return state["function"]["q"]["live"]
+
+
+def test_committed_release_mode_is_the_one_source() -> None:
+    assert (ROOT / "deploy" / "release_mode").read_text().strip() in ("latest", "alias")
+    env_sh = (ROOT / "deploy" / "aws" / "env.sh").read_text()
+    assert "LAMBDA_RELEASE_MODE:-latest" not in env_sh  # no silent default
+    for wf in ("deploy.yml", "monitor.yml"):
+        text = (ROOT / ".github" / "workflows" / wf).read_text()
+        assert "vars.RELEASE_MODE" not in text, wf
+        assert "deploy/release_mode" in text, wf
+
+
+def test_an_override_that_disagrees_with_the_file_is_refused(aws) -> None:
+    _, err = aws(LAMBDA_RELEASE_MODE="alias", EXPECT_FAIL="1")
+    assert "disagrees" in err
+
+
+def test_alias_migration_then_ordinary_reruns_keep_the_unqualified_url_absent(
+    aws,
+) -> None:
+    """Review 2026-09-29: the mode was a one-command override, so the next
+    ordinary lambda.sh run defaulted to latest and recreated the unqualified
+    URL (which serves $LATEST, where unverified candidates wait)."""
+    aws()  # the function as it is today: latest mode, unqualified URL
+    aws.set_mode("alias")  # the migration commit
+    state, out = aws()
+    fn = state["function"]
+    assert fn["aliases"] == {"live": "1"} and fn["url"] is None
+    assert _live(state)["url"]["AuthType"] == "AWS_IAM"
+    assert "deleted the unqualified Function URL" in out
+
+    # an ordinary rerun later - no environment override anywhere
+    state, out = aws()
+    assert state["function"]["url"] is None
+    assert state["function"]["aliases"] == {"live": "1"}  # the alias is deploy.yml's
+    assert not any(op == "create-function-url-config" for op, _ in state["calls"])
+    assert "publish-version" not in _mutations(state)
+
+
+def test_retiring_the_legacy_role_revokes_its_grants_everywhere(aws) -> None:
+    """Review 2026-09-29: the runbook said a rerun after --retire-legacy drops
+    the legacy grants; the script re-added them."""
+    aws()
+    aws.set_mode("alias")
+    state, _ = aws()
+    assert {s["Sid"] for s in _live(state)["policy"]} == {
+        "github-actions-url",
+        "github-actions-invoke",
+    }
+    aws.retire_legacy_role()
+    state, out = aws()
+    assert _live(state)["policy"] == [] and state["function"]["policy"] == []
+    assert "legacy role nyc-taxi-trip-duration-github-actions retired" in out
+    state, _ = aws()  # and it stays that way
+    assert "add-permission" not in _mutations(state)
+
+
+def test_retiring_the_legacy_role_in_latest_mode(aws) -> None:
+    aws()
+    aws.retire_legacy_role()
+    state, _ = aws()
+    assert state["function"]["policy"] == []
+    assert state["function"]["url"]["AuthType"] == "AWS_IAM"  # the URL stays
+
+
+def test_back_to_latest_leaves_exactly_one_url(aws) -> None:
+    aws()
+    aws.set_mode("alias")
+    aws()
+    aws.set_mode("latest")
+    state, out = aws()
+    assert (
+        state["function"]["url"]["FunctionUrl"]
+        == "https://fake-unqualified.lambda-url/"
+    )
+    assert _live(state)["url"] is None and _live(state)["policy"] == []
+
+
+def test_an_unreadable_legacy_role_state_stops_the_run(aws, tmp_path: Path) -> None:
+    aws()
+    state_file = tmp_path / "state.json"
+    state = json.loads(state_file.read_text())
+    state["legacy_role"] = "denied"
+    state_file.write_text(json.dumps(state))
+    # the fake answers "denied" as present unless told otherwise: patch it
+    fake = tmp_path / "bin" / "aws"
+    fake.write_text(
+        fake.read_text().replace(
+            'if state.get("legacy_role", True): done({"Role": {}})',
+            'if state.get("legacy_role") == "denied": fail("AccessDenied")\n'
+            '        if state.get("legacy_role", True): done({"Role": {}})',
+        )
+    )
+    _, err = aws(EXPECT_FAIL="1")
+    assert "cannot tell whether" in err
 
 
 # --- monitoring.sh (called by lambda.sh) -------------------------------------------

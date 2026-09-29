@@ -7,7 +7,8 @@ name: deploy
 # test on the runner with the real champion baked in (model loads, /ready,
 # the champion's fixture predictions, malformed -> 422).
 #
-# RELEASE_MODE (repository variable, ADR-0008 amendment "verified release"):
+# RELEASE_MODE (the committed file deploy/release_mode - the one source, also
+# read by deploy/aws/lambda.sh and monitor.yml; ADR-0008 "verified release"):
 #   alias  - the verified path. The image becomes a new *published version*
 #            that receives no traffic; it is checked through the Lambda API
 #            (cold start, version, fixtures, malformed); only then is the
@@ -43,7 +44,7 @@ on:
         type: boolean
         default: false
       release_id:
-        description: "Restore this recorded release (must be of the selected champion)"
+        description: "Restore this recorded release (<release_id>, or <release_id>/<deployment_id>; must be of the selected champion)"
         type: string
         default: ""
       rebuild:
@@ -77,7 +78,6 @@ jobs:
     env:
       FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
       REPO: ${{ secrets.ECR_REPOSITORY }}
-      RELEASE_MODE: ${{ vars.RELEASE_MODE || 'latest' }}
       # Image pinning needs the ADR-0013 deploy role (ECR tag/preview grants);
       # on the legacy fallback role it is skipped with a warning.
       RETENTION: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
@@ -88,6 +88,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # fetch_champion.py reads models/model_meta.json at the champion sha
+
+      # One source for the mode (lambda.sh and monitor.yml read the same
+      # file); the "Release mode" step checks that AWS agrees with it.
+      - name: Read the release mode
+        run: |
+          MODE=$(tr -d '[:space:]' < deploy/release_mode)
+          case "$MODE" in latest|alias) ;; *) echo "::error::deploy/release_mode says '$MODE' (latest|alias)"; exit 1 ;; esac
+          echo "RELEASE_MODE=$MODE" >> "$GITHUB_ENV"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -132,16 +140,19 @@ jobs:
             exit 0
           fi
           [ "$LEDGER" = "true" ] || { echo "::error::a rollback restores a recorded release, and the ledger needs AWS_DEPLOY_ROLE_ARN (iam.sh migration). To build a NEW release of $VERSION with today's code instead: gh workflow run deploy.yml -f rebuild=true"; exit 1; }
-          RID="$INPUT_RELEASE_ID"
-          if [ -z "$RID" ]; then
-            RID=$(uv run python scripts/releases.py find --bucket "$BUCKET" --model "$VERSION") \
-              || { echo "::error::no verified release of $VERSION is recorded, so it cannot be restored. To build a NEW release of $VERSION with today's code (verified and recorded as new): gh workflow run deploy.yml -f rebuild=true"; exit 1; }
+          # A deployment is one concrete (image, Lambda version, configuration)
+          # of a release. By default: the most recently *activated* one of
+          # this model - never a candidate whose activation failed.
+          REF="$INPUT_RELEASE_ID"
+          if [ -z "$REF" ]; then
+            REF=$(uv run python scripts/releases.py find --bucket "$BUCKET" --model "$VERSION") \
+              || { echo "::error::no successfully activated deployment of $VERSION is recorded, so it cannot be restored. To build a NEW release of $VERSION with today's code (verified and recorded as new): gh workflow run deploy.yml -f rebuild=true"; exit 1; }
           fi
-          uv run python scripts/releases.py get --bucket "$BUCKET" --release-id "$RID" --out build/restore > build-restore.env
+          uv run python scripts/releases.py get --bucket "$BUCKET" --ref "$REF" --out build/restore > build-restore.env
           # shellcheck disable=SC1091
           . ./build-restore.env
           test "$MODEL_VERSION" = "$VERSION" \
-            || { echo "::error::release $RID served $MODEL_VERSION, but the selected champion is $VERSION; roll the registry back first (make rollback)"; exit 1; }
+            || { echo "::error::deployment $REF served $MODEL_VERSION, but the selected champion is $VERSION; roll the registry back first (make rollback)"; exit 1; }
           DIGEST="${IMAGE_URI##*@}"
           aws ecr describe-images --repository-name "$REPO" --image-ids imageDigest="$DIGEST" >/dev/null \
             || { echo "::error::the image of release $RID ($DIGEST) is gone from ECR; rebuild=true builds a new release"; exit 1; }
@@ -151,6 +162,9 @@ jobs:
             echo "RELEASE_ID=$RELEASE_ID"
             echo "IMAGE_URI=$IMAGE_URI"
             echo "RESTORE_LAMBDA_VERSION=$LAMBDA_VERSION"
+            echo "RESTORE_REF=$DEPLOYMENT_REF"
+            # The configuration it ran with: a restore runs with exactly this.
+            echo "RESTORE_CONFIG=build/restore/lambda_config.json"
             echo "RELEASE=$VERSION-restore-${RELEASE_ID:0:12}"
             # Same image, same architecture: the predictions it served are
             # reproduced exactly, or this is not the release that was verified.
@@ -159,6 +173,7 @@ jobs:
           {
             echo "### Plan: restore recorded release of $VERSION (no rebuild)"
             echo "- release: \`$RELEASE_ID\`"
+            echo "- deployment: \`$DEPLOYMENT_REF\`"
             echo "- image: \`$IMAGE_URI\`"
             echo "- Lambda version: ${LAMBDA_VERSION:-none recorded}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -305,13 +320,20 @@ jobs:
               [ "$DEPLOY_ROLE_SET" = "true" ] \
                 || { echo "::error::RELEASE_MODE=alias needs AWS_DEPLOY_ROLE_ARN (iam.sh migration, docs/runbook.md)"; exit 1; }
               # The alias the Function URL serves must exist: the migration
-              # (deploy/aws/lambda.sh with LAMBDA_RELEASE_MODE=alias) creates it.
+              # (deploy/aws/lambda.sh with deploy/release_mode = alias) creates it.
               PREV_VERSION=$(aws lambda get-alias --function-name "$FN" --name live \
                 --query FunctionVersion --output text) \
                 || { echo "::error::RELEASE_MODE=alias but alias 'live' is unreadable; run the migration (docs/runbook.md)"; exit 1; }
+              # And $LATEST, where candidates wait, must not be reachable by URL.
+              if aws lambda get-function-url-config --function-name "$FN" >/dev/null 2>&1; then
+                echo "::error::alias mode, but the unqualified Function URL exists and serves \$LATEST; run deploy/aws/lambda.sh (it deletes it)"; exit 1
+              fi
               echo "PREV_VERSION=$PREV_VERSION" >> "$GITHUB_ENV"
               echo "live alias -> version $PREV_VERSION" ;;
             latest)
+              # The URL callers use must be the one this mode updates.
+              aws lambda get-function-url-config --function-name "$FN" >/dev/null \
+                || { echo "::error::deploy/release_mode says latest but the function has no unqualified Function URL (AWS is in alias mode?); fix the file or run deploy/aws/lambda.sh"; exit 1; }
               echo "::warning::RELEASE_MODE=latest: production is updated before it is verified. Migrate to alias mode (docs/runbook.md)." ;;
             *)
               echo "::error::unknown RELEASE_MODE '$RELEASE_MODE' (alias|latest)"; exit 1 ;;
@@ -324,6 +346,16 @@ jobs:
           # it cannot be repointed afterwards.
           PREV=$(aws lambda get-function --function-name "$FN" \
             --query Code.ImageUri --output text)
+          # A restore is the recorded image AND the recorded configuration
+          # (memory, timeout, environment, ...): the same image under another
+          # configuration is another deployment, with other behaviour. This
+          # workflow does not rewrite configuration (deploy/aws/lambda.sh
+          # owns it), so a difference stops the restore before any change.
+          if [ "$PLAN" = "restore" ]; then
+            aws lambda get-function-configuration --function-name "$FN" > build/current-config.json
+            uv run python scripts/releases.py config-diff --recorded "$RESTORE_CONFIG" --actual build/current-config.json \
+              || { echo "::error::the function's configuration is not the one $RESTORE_REF was verified with. Put it back (deploy/aws/lambda.sh with the recorded values) or build a new deployment: gh workflow run deploy.yml -f rebuild=true"; exit 1; }
+          fi
           # New code means no warm environment can exist: the next invoke is
           # the cold start, measured and proven by deploy_check --cold. The
           # same digest again recycles nothing, so there is nothing to measure.
@@ -351,27 +383,49 @@ jobs:
         if: env.RELEASE_MODE == 'alias'
         run: |
           CANDIDATE=""
+          NEW_VERSION=false
           if [ -n "${RESTORE_LAMBDA_VERSION:-}" ]; then
             # A restore re-activates the recorded version itself when it still
-            # runs the recorded image; otherwise a version is published from it.
+            # runs the recorded image. Versions are immutable, so it also still
+            # has the configuration it was verified with.
             HAS=$(aws lambda get-function --function-name "$FN" --qualifier "$RESTORE_LAMBDA_VERSION" \
               --query Code.ResolvedImageUri --output text 2>/dev/null || true)
-            if [ "$HAS" = "$IMAGE_URI" ]; then CANDIDATE=$RESTORE_LAMBDA_VERSION; fi
+            if [ "$HAS" = "$IMAGE_URI" ]; then
+              CANDIDATE=$RESTORE_LAMBDA_VERSION
+            else
+              echo "::warning::recorded version $RESTORE_LAMBDA_VERSION is unavailable (runs '${HAS:-nothing}'); publishing a replacement from the recorded image"
+            fi
           fi
           if [ -z "$CANDIDATE" ]; then
+            if [ "$PLAN" = "restore" ]; then
+              # A replacement version takes $LATEST's configuration. It is the
+              # recorded deployment only if that is the recorded configuration.
+              aws lambda get-function-configuration --function-name "$FN" > build/latest-config.json
+              uv run python scripts/releases.py config-diff --recorded "$RESTORE_CONFIG" --actual build/latest-config.json \
+                || { echo "::error::the recorded version is gone and \$LATEST's configuration is not the one $RESTORE_REF was verified with. Put it back (deploy/aws/lambda.sh with the recorded values) or build a new deployment: gh workflow run deploy.yml -f rebuild=true"; exit 1; }
+            fi
+            BEFORE=$(aws lambda list-versions-by-function --function-name "$FN" \
+              --query 'Versions[].Version' --output text | tr -s '[:blank:]' '\n')
             aws lambda update-function-code --function-name "$FN" --image-uri "$IMAGE_URI" >/dev/null
             uv run python scripts/lambda_restore.py settle --function "$FN"
             CANDIDATE=$(aws lambda publish-version --function-name "$FN" \
               --description "$RELEASE" --query Version --output text)
             aws lambda wait function-active-v2 --function-name "$FN:$CANDIDATE"
+            # Unchanged code and configuration make publish-version return the
+            # existing version, which may have served (and have warm
+            # environments). Only a version that did not exist before is new.
+            if ! grep -qx "$CANDIDATE" <<<"$BEFORE"; then NEW_VERSION=true; fi
           fi
           RESOLVED=$(aws lambda get-function --function-name "$FN" --qualifier "$CANDIDATE" \
             --query Code.ResolvedImageUri --output text)
-          echo "candidate version $CANDIDATE runs $RESOLVED"
+          echo "candidate version $CANDIDATE runs $RESOLVED (new: $NEW_VERSION)"
           test "$RESOLVED" = "$IMAGE_URI" || { echo "::error::version $CANDIDATE is not the image we pushed"; exit 1; }
-          # A new version has never run, so its first invoke is a cold start.
-          # Publishing unchanged code returns the existing version: nothing new.
-          if [ "$CANDIDATE" != "$PREV_VERSION" ]; then echo "COLD=true" >> "$GITHUB_ENV"; fi
+          # Only a version created by this run has never run, so only there
+          # is the first invoke provably a cold start (deploy_check --cold).
+          # An existing version may reuse a warm environment (AWS allows it
+          # for the same version); it is verified by release id, /ready and
+          # the recorded predictions instead.
+          if [ "$NEW_VERSION" = "true" ]; then echo "COLD=true" >> "$GITHUB_ENV"; fi
           echo "CANDIDATE=$CANDIDATE" >> "$GITHUB_ENV"
           echo "TARGET=$FN:$CANDIDATE" >> "$GITHUB_ENV"
 
@@ -387,7 +441,7 @@ jobs:
           if [ "${COLD:-}" = "true" ]; then
             COLD_ARGS=(--cold --publish-metrics deploy --evidence "coldstart/$RELEASE.json")
           else
-            echo "::notice::image unchanged; no new execution environment, cold start not measured"
+            echo "::notice::no newly created code or version; a warm environment may serve, so the cold start is not measured"
           fi
           read -ra CHECK <<<"$CHECK_ARGS"
           uv run python scripts/deploy_check.py --invoke "$TARGET" \
@@ -398,20 +452,28 @@ jobs:
             --malformed
 
       # The evidence is complete before any traffic in alias mode (and before
-      # the URL check in latest mode): this release, this image, this version,
-      # these served predictions. A release that cannot be recorded cannot be
-      # rolled back to, so it does not go live: a failure here fails the run.
-      - name: Record the verified release in the ledger
+      # the URL check in latest mode): this release, as this deployment (image,
+      # Lambda version, configuration), with these served predictions. It is
+      # recorded as *verified* only; `find` does not pick it for a rollback
+      # until it is also *activated* (below). A deployment that cannot be
+      # recorded cannot be rolled back to, so it does not go live: a failure
+      # here fails the run. Recorded evidence is immutable: re-verifying a
+      # recorded deployment must reproduce it exactly.
+      - name: Record the verified deployment in the ledger
         if: env.LEDGER == 'true'
         run: |
           MANIFEST=build/champion/models/release.json
           if [ "$PLAN" = "restore" ]; then MANIFEST=build/restore/release.json; fi
-          uv run python scripts/releases.py put --bucket "$BUCKET" \
+          aws lambda get-function-configuration --function-name "$TARGET" > build/deployed-config.json
+          REF=$(uv run python scripts/releases.py put --bucket "$BUCKET" \
             --manifest "$MANIFEST" --image "$IMAGE_URI" \
             --model ${{ steps.champ.outputs.version }} \
             --evidence build/served_predictions.csv \
+            --lambda-config build/deployed-config.json \
             --lambda-version "${CANDIDATE:-}" \
-            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+          echo "DEPLOYMENT_REF=$REF" >> "$GITHUB_ENV"
+          echo "recorded deployment $REF (verified)"
 
       - name: Keep the cold-start evidence
         if: always() && env.COLD == 'true'
@@ -457,26 +519,39 @@ jobs:
           echo "::error::injected failure (workflow_dispatch inject_failure=true): the restore step must now put the previous release back"
           exit 1
 
-      # Pins are exactly the new live image and its rollback target (the
-      # image that served before). Bookkeeping only: both are already pinned,
-      # so a failure here must not fail - and restore - a good release.
+      # Pins are exactly the new live image and its rollback target. After a
+      # genuine release that is the image that served before; after a
+      # redeploy of the digest already live, the pair does not move and the
+      # earlier rollback target keeps its pin (ecr_retention.release_pins).
+      # Bookkeeping only: everything kept is already pinned, so a failure
+      # here must not fail - and restore - a good release.
       - name: Keep pins on the live image and its rollback target only
         if: env.RETENTION == 'true'
         continue-on-error: true
         run: |
-          uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact \
-            --digest "$IMAGE_URI" --digest "$LIVE_IMAGE"
+          OLD_ARGS=()
+          for d in $OLD_PINS; do OLD_ARGS+=(--old "$d"); done
+          mapfile -t KEEP < <(uv run python scripts/ecr_retention.py release-pins \
+            --deployed "$IMAGE_URI" --previous "$LIVE_IMAGE" ${OLD_ARGS[@]+"${OLD_ARGS[@]}"})
+          ARGS=()
+          for d in "${KEEP[@]}"; do ARGS+=(--digest "$d"); done
+          echo "keeping pinned: ${KEEP[*]}"
+          uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact "${ARGS[@]}"
 
-      # The *deployed* release, as opposed to the *selected* champion
-      # (champion.json): written only now that activation succeeded, so a
-      # failed deploy leaves it naming what still serves. `make release-status`
-      # and monitor.yml compare the two.
-      - name: Mark the release live
-        if: env.LEDGER == 'true'
+      # Activation succeeded (alias moved, URL checked, drill passed): the
+      # deployment becomes restorable by default, and live.json - the
+      # *deployed* release, as opposed to the *selected* champion
+      # (champion.json) - names it. A failed deploy never gets here, so
+      # live.json keeps naming what still serves. `make release-status` and
+      # monitor.yml compare the two. If this bookkeeping fails, the good
+      # release stays live but a later rollback cannot pick it (and says so).
+      - name: Mark the deployment activated and live
+        if: env.LEDGER == 'true' && env.DEPLOYMENT_REF != ''
         continue-on-error: true
         run: |
-          uv run python scripts/releases.py mark-live --bucket "$BUCKET" --release-id "$RELEASE_ID" \
-            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          uv run python scripts/releases.py activate --bucket "$BUCKET" --ref "$DEPLOYMENT_REF" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            || { echo "::warning::$DEPLOYMENT_REF is live but not recorded as activated; a rollback will not select it"; exit 1; }
 
       - name: Ledger skipped (legacy role)
         if: env.LEDGER != 'true'
@@ -537,3 +612,13 @@ jobs:
           ARGS=(--digest "$LIVE_IMAGE")
           for d in $OLD_PINS; do ARGS+=(--digest "$d"); done
           uv run python scripts/ecr_retention.py pin --repo "$REPO" --exact "${ARGS[@]}"
+
+      # The candidate was recorded as verified, then its activation failed
+      # (alias move, URL check, drill) and production went back. Recorded as
+      # such, so a later rollback never selects it by default.
+      - name: Record the failed activation
+        if: failure() && env.DEPLOYMENT_REF != ''
+        continue-on-error: true
+        run: |
+          uv run python scripts/releases.py fail --bucket "$BUCKET" --ref "$DEPLOYMENT_REF" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

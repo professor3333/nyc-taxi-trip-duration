@@ -1,26 +1,38 @@
-"""The release ledger: verified releases by content id, and the one that is live.
+"""The release ledger: every verified deployment of a release, what became of
+it, and the one that is live.
 
-    uv run python scripts/releases.py put       --bucket B --manifest M --image URI \\
-        --model vN --evidence served.csv [--lambda-version N] [--run-url U]
-    uv run python scripts/releases.py find      --bucket B --model vN   # -> release id
-    uv run python scripts/releases.py get       --bucket B --release-id ID --out DIR
-    uv run python scripts/releases.py mark-live --bucket B --release-id ID [--run-url U]
-    uv run python scripts/releases.py status    --bucket B [--champion FILE]
-    uv run python scripts/releases.py live-id   --bucket B   # "" if none recorded
+    uv run python scripts/releases.py put        --bucket B --manifest M --image URI \\
+        --model vN --evidence served.csv --lambda-config cfg.json \\
+        [--lambda-version N] [--run-url U]              # -> deployment ref
+    uv run python scripts/releases.py activate   --bucket B --ref REF [--run-url U]
+    uv run python scripts/releases.py fail       --bucket B --ref REF [--run-url U]
+    uv run python scripts/releases.py find       --bucket B --model vN   # -> ref
+    uv run python scripts/releases.py get        --bucket B --ref REF|ID --out DIR
+    uv run python scripts/releases.py config-diff --recorded R --actual A
+    uv run python scripts/releases.py status     --bucket B [--champion FILE]
+    uv run python scripts/releases.py live-id    --bucket B   # "" if none recorded
 
-``s3://<bucket>/releases/<release_id>.json`` is written by deploy.yml once a
-release has passed its checks on Lambda. It holds the manifest (what the
-release is: ``tripduration.release``), the image digest and Lambda version
-(where it runs), and the predictions it actually served on the fixture grid
-(what it does). A rollback restores a recorded release: that image, that
-version. It must report the same ``release_id`` and serve those predictions
-exactly. Nothing is rebuilt.
+A *release* is content (``tripduration.release``: model, references, code,
+environment, config -> ``release_id``). A *deployment* is one concrete way
+that content ran on Lambda: an image digest, a Lambda version (or $LATEST)
+and the Lambda configuration that shapes its behaviour (memory, timeout,
+environment, ...). The same release can have several deployments - a
+``fresh_build`` gives another digest, a republish another version, a config
+change another snapshot - and each is recorded separately under
+``releases/deployments/<release_id>/<deployment_id>.json``, with the
+predictions *it* served. Nothing a rollback replays is ever overwritten:
+``put`` refuses to change the evidence of an existing deployment.
 
-``releases/live.json`` is the release that is **deployed**. It is written
-only after activation succeeded, and it is separate from
-``models/champion.json``, which is the model the registry **selected**.
-Moving a registry alias precedes the deploy, and the deploy can fail, so
-the two can differ. ``status`` shows both.
+Each deployment carries events: ``verified`` (passed its checks on Lambda,
+before activation), ``activated`` (it served production and passed the
+endpoint checks) and ``activation_failed`` (its deploy failed after it was
+recorded; production went back). ``find`` restores the most recently
+*activated* deployment whose last event is not a failure; a candidate from a
+failed deploy is never picked by default.
+
+``releases/live.json`` is the deployment that is **deployed**, written only on
+activation, separate from ``models/champion.json`` (what the registry
+**selected**). ``status`` shows both.
 """
 
 from __future__ import annotations
@@ -34,65 +46,156 @@ from pathlib import Path
 from typing import Any
 
 PREFIX = "releases/"
+DEPLOYMENTS = f"{PREFIX}deployments/"
 LIVE_KEY = f"{PREFIX}live.json"
-REQUIRED = ("release_id", "model_version", "image_uri", "verified_at")
+SCHEMA = 2
+EVENTS = ("verified", "activated", "activation_failed")
+# Immutable once recorded: what a restore re-activates and must reproduce.
+EVIDENCE = (
+    "release_id",
+    "deployment_id",
+    "model_version",
+    "manifest",
+    "image_uri",
+    "lambda_version",
+    "lambda_config",
+    "served_predictions_csv",
+    "served_predictions_sha256",
+)
 
 
 def now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def config_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The part of ``get-function-configuration`` that changes what a
+    deployment does: CPU (memory), limits, environment (e.g. API limits),
+    architecture and the image's entrypoint config. The execution role, log
+    group and tags are infrastructure, reconciled by deploy/aws/*.sh, and are
+    not part of a release."""
+    return {
+        "MemorySize": cfg.get("MemorySize"),
+        "Timeout": cfg.get("Timeout"),
+        "EphemeralStorage": (cfg.get("EphemeralStorage") or {}).get("Size", 512),
+        "Environment": dict(
+            sorted(((cfg.get("Environment") or {}).get("Variables") or {}).items())
+        ),
+        "Architectures": cfg.get("Architectures") or ["x86_64"],
+        "ImageConfig": (cfg.get("ImageConfigResponse") or {}).get("ImageConfig") or {},
+    }
+
+
+def config_diff(recorded: dict[str, Any], actual: dict[str, Any]) -> list[str]:
+    """Human-readable differences between two snapshots (empty = same)."""
+    return [
+        f"{k}: recorded {json.dumps(recorded.get(k), sort_keys=True)}, "
+        f"now {json.dumps(actual.get(k), sort_keys=True)}"
+        for k in sorted(set(recorded) | set(actual))
+        if recorded.get(k) != actual.get(k)
+    ]
+
+
+def deployment_id(
+    image_uri: str, lambda_version: str | None, cfg: dict[str, Any]
+) -> str:
+    """``<digest hex[:16]>-<version|latest>-<config sha[:8]>``: one id per
+    concrete (image, Lambda version, configuration)."""
+    digest = image_uri.rsplit("@", 1)[-1].partition(":")[2]
+    if not digest:
+        raise ValueError(f"image must be pinned by digest: {image_uri!r}")
+    cfg_sha = _sha256(json.dumps(cfg, sort_keys=True))[:8]
+    return f"{digest[:16]}-{lambda_version or 'latest'}-{cfg_sha}"
 
 
 def make_record(
-    existing: dict[str, Any] | None,
     *,
     manifest: dict[str, Any],
     model_version: str,
     image_uri: str,
     lambda_version: str | None,
+    lambda_config: dict[str, Any],
     served_csv: str,
-    run_url: str,
-    verified_at: str,
 ) -> dict[str, Any]:
-    """The ledger entry after one more successful verification.
-
-    Identical content gives the same release id, but a rebuild may give a
-    different image digest, so every verified (image, version) is kept in
-    ``history`` and the latest one is what a rollback restores.
-    """
+    """A deployment's evidence, before any event."""
     if manifest["components"]["model"]["version"] != model_version:
         raise ValueError(
             f"manifest is for {manifest['components']['model']['version']}, "
             f"not {model_version}"
         )
-    if existing and existing["release_id"] != manifest["release_id"]:
-        raise ValueError("existing record is for another release")
-    entry = {
-        "image_uri": image_uri,
-        "lambda_version": lambda_version,
-        "verified_at": verified_at,
-        "run_url": run_url,
-        "served_predictions_sha256": hashlib.sha256(served_csv.encode()).hexdigest(),
-    }
     return {
+        "schema": SCHEMA,
         "release_id": manifest["release_id"],
+        "deployment_id": deployment_id(image_uri, lambda_version, lambda_config),
         "model_version": model_version,
         "manifest": manifest,
-        **entry,
+        "image_uri": image_uri,
+        "lambda_version": lambda_version,
+        "lambda_config": lambda_config,
         "served_predictions_csv": served_csv,
-        "history": [*(existing or {}).get("history", []), entry],
+        "served_predictions_sha256": _sha256(served_csv),
+        "events": [],
     }
 
 
-def latest_for_model(
-    records: list[dict[str, Any]], model: str
+def merge_verified(
+    existing: dict[str, Any] | None, new: dict[str, Any], at: str, run_url: str
+) -> dict[str, Any]:
+    """``new`` with one more ``verified`` event. Re-verifying a recorded
+    deployment must reproduce its evidence exactly; anything else is refused,
+    so the predictions a restore replays are never replaced."""
+    if existing is not None:
+        changed = [k for k in EVIDENCE if existing.get(k) != new.get(k)]
+        if changed:
+            raise ValueError(
+                f"deployment {new['deployment_id']} is recorded with different "
+                f"{', '.join(changed)}; recorded evidence is immutable"
+            )
+        new = {**existing}
+    return add_event(new, "verified", at, run_url)
+
+
+def add_event(rec: dict[str, Any], event: str, at: str, run_url: str) -> dict[str, Any]:
+    if event not in EVENTS:
+        raise ValueError(f"unknown event {event!r}")
+    return {
+        **rec,
+        "events": [*rec["events"], {"event": event, "at": at, "run_url": run_url}],
+    }
+
+
+def ref_of(rec: dict[str, Any]) -> str:
+    return f"{rec['release_id']}/{rec['deployment_id']}"
+
+
+def last_activated(rec: dict[str, Any]) -> str | None:
+    """When ``rec`` last went live successfully, or None if it is not
+    restorable by default (never activated, or its last event is a failure)."""
+    events = rec.get("events", [])
+    if not events or events[-1]["event"] == "activation_failed":
+        return None
+    return max((e["at"] for e in events if e["event"] == "activated"), default=None)
+
+
+def latest_activated(
+    records: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    release_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """The most recently verified release that served ``model`` (e.g. "v3")."""
+    """The most recently activated deployment of ``model`` / ``release_id``."""
     mine = [
-        r
+        (at, r)
         for r in records
-        if r.get("model_version") == model and all(r.get(k) for k in REQUIRED)
+        if (model is None or r.get("model_version") == model)
+        and (release_id is None or r.get("release_id") == release_id)
+        and (at := last_activated(r)) is not None
     ]
-    return max(mine, key=lambda r: r["verified_at"], default=None)
+    return max(mine, key=lambda p: p[0], default=(None, None))[1]
 
 
 def status_lines(
@@ -105,8 +208,7 @@ def status_lines(
         + (f", action {champion.get('action', 'promote')}" if champion else ""),
         (
             f"deployed (releases/live.json):   {live['model_version']} release "
-            f"{live['release_id'][:12]} "
-            f"image {live['image_uri'].rsplit('@', 1)[-1][:19]}"
+            f"{live['release_id'][:12]} deployment {live.get('deployment_id', '?')}"
             f" since {live['activated_at']}"
             if live
             else "deployed (releases/live.json):   no recorded release"
@@ -152,95 +254,184 @@ def _put(s3: Any, bucket: str, key: str, doc: dict[str, Any]) -> None:
     )
 
 
-def _records(s3: Any, bucket: str) -> list[dict[str, Any]]:
+def _key(ref: str) -> str:
+    rid, _, dep = ref.partition("/")
+    if not rid or not dep or "/" in dep:
+        raise ValueError(f"not a deployment ref <release_id>/<deployment_id>: {ref!r}")
+    return f"{DEPLOYMENTS}{rid}/{dep}.json"
+
+
+def _records(s3: Any, bucket: str, prefix: str = DEPLOYMENTS) -> list[dict[str, Any]]:
     out = []
     for page in s3.get_paginator("list_objects_v2").paginate(
-        Bucket=bucket, Prefix=PREFIX
+        Bucket=bucket, Prefix=prefix
     ):
         for obj in page.get("Contents", []):
-            if obj["Key"] != LIVE_KEY:
-                doc = _get(s3, bucket, obj["Key"])
-                if doc:
-                    out.append(doc)
+            doc = _get(s3, bucket, obj["Key"])
+            if doc:
+                out.append(doc)
     return out
+
+
+def _event(
+    s3: Any, bucket: str, ref: str, event: str, run_url: str
+) -> dict[str, Any] | None:
+    rec = _get(s3, bucket, _key(ref))
+    if rec is None:
+        return None
+    rec = add_event(rec, event, now(), run_url)
+    _put(s3, bucket, _key(ref), rec)
+    return rec
 
 
 def main(argv: list[str] | None = None, s3: Any = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
-        "action", choices=["put", "find", "get", "mark-live", "status", "live-id"]
+        "action",
+        choices=[
+            "put",
+            "activate",
+            "fail",
+            "find",
+            "get",
+            "config-diff",
+            "status",
+            "live-id",
+        ],
     )
-    ap.add_argument("--bucket", required=True)
+    ap.add_argument("--bucket")
     ap.add_argument("--manifest", type=Path)
     ap.add_argument("--image")
     ap.add_argument("--model")
     ap.add_argument("--evidence", type=Path)
     ap.add_argument("--lambda-version")
+    ap.add_argument(
+        "--lambda-config", type=Path, help="get-function-configuration JSON"
+    )
     ap.add_argument("--run-url", default="")
-    ap.add_argument("--release-id")
+    ap.add_argument("--ref", help="<release_id>/<deployment_id>, or a release id")
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--recorded", type=Path, help="config-diff: recorded snapshot")
+    ap.add_argument(
+        "--actual", type=Path, help="config-diff: get-function-configuration"
+    )
     ap.add_argument("--champion", type=Path, default=Path("models/champion.json"))
     ap.add_argument("--strict", action="store_true", help="status: exit 1 on mismatch")
     args = ap.parse_args(argv)
+
+    if args.action == "config-diff":  # local files only
+        if not (args.recorded and args.actual):
+            ap.error("config-diff needs --recorded and --actual")
+        diff = config_diff(
+            json.loads(args.recorded.read_text()),
+            config_snapshot(json.loads(args.actual.read_text())),
+        )
+        for d in diff:
+            print(f"differs: {d}")
+        if not diff:
+            print("configuration matches the recording")
+        return 1 if diff else 0
+
+    if not args.bucket:
+        ap.error(f"{args.action} needs --bucket")
     s3 = s3 or _s3()
 
     if args.action == "put":
-        for name in ("manifest", "image", "model", "evidence"):
+        for name in ("manifest", "image", "model", "evidence", "lambda_config"):
             if not getattr(args, name):
-                ap.error(f"put needs --{name}")
-        manifest = json.loads(args.manifest.read_text())
-        key = f"{PREFIX}{manifest['release_id']}.json"
-        rec = make_record(
-            _get(s3, args.bucket, key),
-            manifest=manifest,
+                ap.error(f"put needs --{name.replace('_', '-')}")
+        new = make_record(
+            manifest=json.loads(args.manifest.read_text()),
             model_version=args.model,
             image_uri=args.image,
             lambda_version=args.lambda_version or None,
+            lambda_config=config_snapshot(json.loads(args.lambda_config.read_text())),
             served_csv=args.evidence.read_text(),
-            run_url=args.run_url,
-            verified_at=now(),
         )
+        key = _key(ref_of(new))
+        try:
+            rec = merge_verified(_get(s3, args.bucket, key), new, now(), args.run_url)
+        except ValueError as e:
+            print(f"refusing: {e}", file=sys.stderr)
+            return 1
         _put(s3, args.bucket, key, rec)
-        print(f"recorded release {rec['release_id']} ({rec['model_version']})")
+        print(ref_of(rec))
+        return 0
+
+    if args.action in ("activate", "fail"):
+        if not args.ref:
+            ap.error(f"{args.action} needs --ref")
+        event = "activated" if args.action == "activate" else "activation_failed"
+        rec = _event(s3, args.bucket, args.ref, event, args.run_url)
+        if rec is None:
+            print(f"refusing: deployment {args.ref} is not recorded", file=sys.stderr)
+            return 1
+        if event == "activated":
+            _put(
+                s3,
+                args.bucket,
+                LIVE_KEY,
+                {
+                    "release_id": rec["release_id"],
+                    "deployment_id": rec["deployment_id"],
+                    "model_version": rec["model_version"],
+                    "image_uri": rec["image_uri"],
+                    "lambda_version": rec.get("lambda_version"),
+                    "activated_at": rec["events"][-1]["at"],
+                    "run_url": args.run_url,
+                },
+            )
+        print(f"{event}: {rec['model_version']} {ref_of(rec)}")
         return 0
 
     if args.action == "find":
-        found = latest_for_model(_records(s3, args.bucket), args.model)
+        found = latest_activated(_records(s3, args.bucket), model=args.model)
         if found is None:
-            print(f"no verified release of {args.model} in the ledger", file=sys.stderr)
+            print(
+                f"no successfully activated deployment of {args.model} in the ledger",
+                file=sys.stderr,
+            )
             return 1
-        print(found["release_id"])
+        print(ref_of(found))
         return 0
 
     if args.action == "get":
-        rec = _get(s3, args.bucket, f"{PREFIX}{args.release_id}.json")
+        if not (args.ref and args.out):
+            ap.error("get needs --ref and --out")
+        if "/" in args.ref:  # an explicit deployment: restore exactly that one
+            rec = _get(s3, args.bucket, _key(args.ref))
+            if rec and last_activated(rec) is None:
+                print(
+                    f"warning: {args.ref} has no successful activation as its "
+                    "latest outcome; restoring it because it was named explicitly",
+                    file=sys.stderr,
+                )
+        else:  # a release id: its most recently activated deployment
+            rec = latest_activated(
+                _records(s3, args.bucket, f"{DEPLOYMENTS}{args.ref}/"),
+                release_id=args.ref,
+            )
         if rec is None:
-            print(f"no release {args.release_id} in the ledger", file=sys.stderr)
+            print(
+                f"no restorable deployment for {args.ref} in the ledger",
+                file=sys.stderr,
+            )
             return 1
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "record.json").write_text(json.dumps(rec, indent=2) + "\n")
         (args.out / "served_predictions.csv").write_text(rec["served_predictions_csv"])
-        for k in ("release_id", "model_version", "image_uri", "lambda_version"):
-            print(f"{k.upper()}={rec.get(k) or ''}")
-        return 0
-
-    if args.action == "mark-live":
-        rec = _get(s3, args.bucket, f"{PREFIX}{args.release_id}.json")
-        if rec is None:
-            print(
-                f"refusing: release {args.release_id} is not recorded", file=sys.stderr
-            )
-            return 1
-        live = {
-            "release_id": rec["release_id"],
-            "model_version": rec["model_version"],
-            "image_uri": rec["image_uri"],
-            "lambda_version": rec.get("lambda_version"),
-            "activated_at": now(),
-            "run_url": args.run_url,
+        (args.out / "lambda_config.json").write_text(
+            json.dumps(rec["lambda_config"], indent=2, sort_keys=True) + "\n"
+        )
+        env = {
+            "RELEASE_ID": rec["release_id"],
+            "DEPLOYMENT_REF": ref_of(rec),
+            "MODEL_VERSION": rec["model_version"],
+            "IMAGE_URI": rec["image_uri"],
+            "LAMBDA_VERSION": rec.get("lambda_version") or "",
         }
-        _put(s3, args.bucket, LIVE_KEY, live)
-        print(f"live: {live['model_version']} release {live['release_id']}")
+        for k, v in env.items():
+            print(f"{k}={v}")
         return 0
 
     if args.action == "live-id":

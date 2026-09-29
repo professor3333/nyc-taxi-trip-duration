@@ -4,6 +4,8 @@
         [--exact]
     uv run python scripts/ecr_retention.py check --repo R --protect D1 [--protect D2]
     uv run python scripts/ecr_retention.py pinned --repo R   # one digest per line
+    uv run python scripts/ecr_retention.py release-pins --deployed D --previous P \
+        [--old D ...]                                         # digests to keep pinned
 
 The lifecycle policy (``deploy/aws/ecr-lifecycle.json``) keeps the newest 5
 images of any tag. Rejected releases are pushed too (the scan and the smoke
@@ -126,6 +128,22 @@ def simulate(policy: Mapping[str, Any], images: Sequence[Image]) -> set[str]:
                 expired.add(img.digest)
         claimed |= {i.digest for i in matched}
     return expired
+
+
+def release_pins(deployed: str, previous: str, old: Iterable[str]) -> list[str]:
+    """What stays pinned after a successful deploy of ``deployed``.
+
+    A genuine release (``previous`` served a different digest) advances the
+    pair: exactly the new live image and the one it replaced. A redeploy of
+    the digest that was already live is not a transition, so the pair must
+    not move: ``previous`` *is* ``deployed`` and the real rollback target is
+    whatever was pinned before (``old``). Unpinning it would let the lifecycle
+    expire the only image a rollback can restore.
+    """
+    deployed, previous = digest_of(deployed), digest_of(previous)
+    if deployed != previous:
+        return [deployed, previous]
+    return list(dict.fromkeys([deployed, *(digest_of(d) for d in old if d)]))
 
 
 def unpin_plan(
@@ -280,10 +298,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--digest", action="append", required=True, help="image or digest")
     p.add_argument("--exact", action="store_true", help="unpin every other image")
     sub.add_parser("pinned").add_argument("--repo", required=True)
+    r = sub.add_parser("release-pins", help="print the digests to pin --exact")
+    r.add_argument("--deployed", required=True)
+    r.add_argument("--previous", required=True, help="the image live before")
+    r.add_argument("--old", action="append", default=[], help="pinned before")
     c = sub.add_parser("check")
     c.add_argument("--repo", required=True)
     c.add_argument("--protect", action="append", required=True, help="image or digest")
     args = ap.parse_args(argv)
+    if args.cmd == "release-pins":  # pure: no AWS
+        print("\n".join(release_pins(args.deployed, args.previous, args.old)))
+        return 0
 
     import boto3
 

@@ -160,19 +160,19 @@ def test_alias_mode_verifies_the_candidate_before_it_takes_traffic() -> None:
         "failure() && env.RELEASE_MODE == 'alias' && env.PREV_VERSION != ''"
     )
     assert '--function-version "$PREV_VERSION"' in back["run"]
-    assert names[-3:] == [
+    assert names[-4:] == [
         "Restore the previous image",
         "Move the live alias back",
         "Put the pins back",
+        "Record the failed activation",
     ]
 
 
 def test_monitor_probes_what_callers_are_served() -> None:
     job = _wf("monitor.yml")["jobs"]["monitor"]
-    assert job["env"]["TARGET"].endswith(
-        "${{ vars.RELEASE_MODE == 'alias' && ':live' || '' }}"
-    )
     runs = "\n".join(st.get("run", "") for st in job["steps"])
+    # the mode comes from the committed file, like lambda.sh and deploy.yml
+    assert 'echo "TARGET=$FN:live"' in runs and "deploy/release_mode" in runs
     assert '--invoke "$TARGET"' in runs
     assert '--qualifier "$URL_QUALIFIER"' in runs
 
@@ -254,19 +254,27 @@ def test_ledger_records_before_traffic_and_marks_live_after_activation() -> None
     check = names.index(
         "Deploy check (cold start first, then version, fixtures, malformed -> 422)"
     )
-    record = names.index("Record the verified release in the ledger")
+    record = names.index("Record the verified deployment in the ledger")
     move = names.index("Move the live alias to the verified version")
     url = names.index("Deploy check over the Function URL (HTTP)")
-    live = names.index("Mark the release live")
-    assert check < record < move < url < live
+    drill = names.index("Drill - injected failure")
+    live = names.index("Mark the deployment activated and live")
+    assert check < record < move < url < drill < live
     assert "--record-predictions build/served_predictions.csv" in steps[check]["run"]
     assert "--evidence build/served_predictions.csv" in steps[record]["run"]
+    assert "--lambda-config build/deployed-config.json" in steps[record]["run"]
+    assert "DEPLOYMENT_REF" in steps[record]["run"]
+    assert "releases.py activate" in steps[live]["run"]
     # a release that cannot be recorded cannot be rolled back to: it fails
     assert "continue-on-error" not in steps[record]
     # the deployed pointer is bookkeeping after success; a failed deploy
     # never writes it, so it keeps naming what still serves
     assert steps[live]["continue-on-error"] is True
     assert live < names.index("Restore the previous image")
+    # a candidate whose activation failed is recorded as such, never as live
+    failed = steps[names.index("Record the failed activation")]
+    assert failed["if"] == "failure() && env.DEPLOYMENT_REF != ''"
+    assert "releases.py fail" in failed["run"]
 
 
 def test_monitor_compares_the_service_with_the_deployed_release() -> None:
