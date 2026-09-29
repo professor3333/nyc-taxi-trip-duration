@@ -1,0 +1,129 @@
+{
+  "month": "2025-10",
+  "verdict": "fail",
+  "reasons": [
+    "challenger MAE 4.3680 not below champion prospective on 2025-10 4.2727",
+    "improvement -2.23% is below the 1.0% minimum worth a release",
+    "improvement not distinguishable from zero: 95% day-block interval [-3.29%, -1.11%] over 31 days",
+    "slice period=weekend_or_holiday_pm_peak (n=288543) worse by +10.2%: 4.070 -> 4.487 (limit +3.0%)",
+    "slice route=237->142 (n=7999) worse by +8.5%: 3.437 -> 3.731 (limit +3.0%)",
+    "slice borough_pair=Bronx->Manhattan (n=16402) worse by +6.5%: 11.524 -> 12.276 (limit +3.0%)",
+    "slice route=186->230 (n=7572) worse by +5.9%: 4.485 -> 4.751 (limit +3.0%)",
+    "slice route=161->236 (n=10909) worse by +5.6%: 3.664 -> 3.867 (limit +3.0%)",
+    "slice period=weekend_or_holiday_evening (n=228106) worse by +5.3%: 3.363 -> 3.540 (limit +3.0%)",
+    "slice period=weekend_or_holiday_midday (n=362658) worse by +4.5%: 4.455 -> 4.657 (limit +3.0%)",
+    "slice route=236->161 (n=9597) worse by +4.5%: 3.843 -> 4.016 (limit +3.0%)",
+    "slice route=142->237 (n=8136) worse by +4.1%: 2.869 -> 2.985 (limit +3.0%)",
+    "slice borough_pair=Manhattan->Manhattan (n=3406809) worse by +4.0%: 3.573 -> 3.716 (limit +3.0%)",
+    "... and 1 more regressed slices"
+  ],
+  "candidate": {
+    "mae_test_model": 4.368022496393157,
+    "mae_test_fallback": 4.75352243545345,
+    "train_months": [
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06",
+      "2025-07",
+      "2025-08"
+    ],
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "model_md5": "bdbae95bda1419022e4bf0b3ce545dbc"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 4.272678169475741
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": -0.02231488615233479,
+      "lower": -0.03288140476983738,
+      "upper": -0.011071714423640308,
+      "days": 31
+    },
+    "slices_checked": 57,
+    "slices_regressed": 11,
+    "worst_slices": [
+      {
+        "family": "period",
+        "slice": "weekend_or_holiday_pm_peak",
+        "n": 288543,
+        "mae_champion": 4.070123487290149,
+        "mae_candidate": 4.4867686381457546,
+        "ratio": 1.1023667100412728,
+        "regressed": true
+      },
+      {
+        "family": "route",
+        "slice": "237->142",
+        "n": 7999,
+        "mae_champion": 3.437119735901477,
+        "mae_candidate": 3.730775110788047,
+        "ratio": 1.0854364693261263,
+        "regressed": true
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Bronx->Manhattan",
+        "n": 16402,
+        "mae_champion": 11.524238629351368,
+        "mae_candidate": 12.276116343982904,
+        "ratio": 1.06524315738452,
+        "regressed": true
+      },
+      {
+        "family": "route",
+        "slice": "186->230",
+        "n": 7572,
+        "mae_champion": 4.484609218232426,
+        "mae_candidate": 4.751120941484706,
+        "ratio": 1.0594280817532022,
+        "regressed": true
+      },
+      {
+        "family": "route",
+        "slice": "161->236",
+        "n": 10909,
+        "mae_champion": 3.6637191377021785,
+        "mae_candidate": 3.867173814774808,
+        "ratio": 1.0555322800208513,
+        "regressed": true
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2025-10",
+    "candidate": {
+      "model_md5": "bdbae95bda1419022e4bf0b3ce545dbc",
+      "dvc_lock_md5": "bec5f6398cb007b27d98e8d37a1d8b37"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "27415cb9550de0f84043dc759051a5b41a83eadb4090fd1a721e254a5a6459d1",
+      "slices_sha256": "d9de688101c4e37bd8850042ddb545956111001f7e6c2d8d261b8c69135d673f"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-29T10:31:11+00:00"
+}
