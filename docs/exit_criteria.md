@@ -2,7 +2,7 @@
 
 Each criterion is met only when its proof is linked here.
 
-## 1. Reproducible training — MET (locally)
+## 1. Reproducible training — MET (canonical environment, current code)
 
 **Claim.** From a fresh clone of a stated commit, `make setup && dvc pull &&
 dvc repro` reproduces `metrics/eval.json` within tolerance, and the
@@ -23,7 +23,26 @@ identical, which proves only that the cache works — the milestone's own
 warning that "downloading an existing model does not demonstrate reproducible
 training" applies to the run cache too.
 
-**Proof.** `make reproduce` on commit `ab70bd93`, 2026-09-22, this machine
+**Current proof (2026-09-29).** `reproduce.yml mode=verify` for commit
+`fbc5272` (the outputs regenerated after `configs/training_env.txt` became a
+stage dependency, #90/#92): fresh clone, canonical training container,
+linux/amd64 runner, no network, every stage re-executed on 26.3M raw rows
+(train 17,559,240 rows, 2024-10..2025-02; val 2025-03; test 2025-04).
+Run: https://github.com/professor3333/nyc-taxi-trip-duration/actions/runs/36520632717
+
+```
+== predictions vs fbc5272f712a, tolerance 0.0 min
+== metrics vs fbc5272f712a, tolerance 0.0
+   every metric identical within tolerance
+predictions and metrics both reproduce
+   predictions within 0 min, metrics within 0
+```
+
+The regeneration itself (run 36518761397) left `model.pkl`,
+`fallback_table.parquet` and `data/processed` md5-identical to the previous
+lock; only the lock's dependency list and git-tracked reports changed.
+
+**First proof (history).** `make reproduce` on commit `ab70bd93`, 2026-09-22, this machine
 (Apple Silicon, 4 threads), every stage re-executed (model fit 139.7 s on
 7,195,609 rows, 4 m 46 s total):
 
