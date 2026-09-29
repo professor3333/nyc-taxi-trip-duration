@@ -1,0 +1,111 @@
+{
+  "artifacts": {
+    "models/.gitignore": {
+      "bytes": 35,
+      "md5": "74f745efe9114c611de048d0119f576e"
+    },
+    "models/champion.json": {
+      "bytes": 787,
+      "md5": "d1d265f6a855e9ab707deb3588203af1"
+    },
+    "models/champion_fixture.csv": {
+      "bytes": 5554,
+      "md5": "a56d2f6b795755b20bfe6b19e3335ced"
+    },
+    "models/champion_meta.json": {
+      "bytes": 1112,
+      "md5": "7071e62bb1abd1417d7ec2bd5ada373f"
+    },
+    "models/fallback_table.parquet": {
+      "bytes": 718715,
+      "md5": "feaf5eb1e6396b4f197c6c346d0a0ae6"
+    },
+    "models/model.pkl": {
+      "bytes": 2205371,
+      "md5": "8e958f8724294b2fe2e59e4c28d552bb"
+    },
+    "models/model_meta.json": {
+      "bytes": 2210,
+      "md5": "d8a0acf51acd18a56bf3366bda5bffe9"
+    },
+    "reports/prepare.json": {
+      "bytes": 751,
+      "md5": "6fbcd10dbc4a6a5b41ff74e435d6d77d"
+    }
+  },
+  "end_time": 1790683180174,
+  "experiment": "nyc-taxi-trip-duration",
+  "exported_at": "2026-09-29T12:01:33+00:00",
+  "metric_history": {
+    "fit_seconds": [
+      {
+        "step": 0,
+        "timestamp": 1790683180155,
+        "value": 456.47465675800004
+      }
+    ],
+    "train_rows": [
+      {
+        "step": 0,
+        "timestamp": 1790683180155,
+        "value": 23461406.0
+      }
+    ],
+    "val_mae_fallback": [
+      {
+        "step": 0,
+        "timestamp": 1790683180155,
+        "value": 5.090852015234993
+      }
+    ],
+    "val_mae_model": [
+      {
+        "step": 0,
+        "timestamp": 1790683180155,
+        "value": 4.718055870262303
+      }
+    ]
+  },
+  "metrics": {
+    "fit_seconds": 456.47465675800004,
+    "train_rows": 23461406.0,
+    "val_mae_fallback": 5.090852015234993,
+    "val_mae_model": 4.718055870262303
+  },
+  "params": {
+    "fallback.hour_bucket_edges": "[0, 6, 10, 16, 20, 24]",
+    "fallback.min_count": "5",
+    "model.l2_regularization": "1.0",
+    "model.learning_rate": "0.1",
+    "model.loss": "absolute_error",
+    "model.max_bins": "255",
+    "model.max_iter": "300",
+    "model.max_leaf_nodes": "63",
+    "model.min_samples_leaf": "200",
+    "n_threads": "4",
+    "params_hash": "4399ca8445b04f56",
+    "seed": "42",
+    "test_month": "2026-01",
+    "train_months": "2025-06,2025-07,2025-08,2025-09,2025-10,2025-11",
+    "val_month": "2025-12"
+  },
+  "run_id": "435fbfaeb3494d9fa39a365ee8d30faf",
+  "start_time": 1790683180130,
+  "status": "FINISHED",
+  "tags": {
+    "container": "tripduration-train:635bc0815de7@sha256:556388c1358b1a48ffd6feadba827fd801edea9777899d79a8633088307c777b",
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "mlflow.runName": "redolent-fowl-572",
+    "mlflow.source.git.branch": "main",
+    "mlflow.source.git.commit": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "mlflow.source.git.repoURL": "https://github.com/professor3333/nyc-taxi-trip-duration",
+    "mlflow.source.name": "/work/src/tripduration/train.py",
+    "mlflow.source.type": "LOCAL",
+    "mlflow.user": "trainer",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.41",
+    "stage": "train",
+    "train_parquet_md5": "29de97919f659edcd60cef8c949b2749",
+    "uv_lock_md5": "172a80f2d233d5284a269833ee714738"
+  },
+  "tracking_uri": "sqlite:///ci-mlflow.db"
+}

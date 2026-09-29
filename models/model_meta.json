@@ -4,7 +4,7 @@
     "do_borough"
   ],
   "environment": {
-    "container": "tripduration-train:635bc0815de7@sha256:397798af712c21fb1ba528fee476dac1a66beb773f2ec0e4e2065681f1e27764",
+    "container": "tripduration-train:635bc0815de7@sha256:556388c1358b1a48ffd6feadba827fd801edea9777899d79a8633088307c777b",
     "machine": "x86_64",
     "packages": {
       "numpy": "2.5.3",
@@ -46,15 +46,15 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "be6e18a3e171e571726ef3ed198992e3aaf97be9",
+  "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
   "inputs_md5": {
     "configs/holidays.csv": "63cb7aadeda8ac77ddac8eafac4563f5",
-    "data/processed/train.parquet": "c8a464a33c1db85322a9a6103d57b3fe",
-    "data/processed/val.parquet": "9c64164b93b783d49fd03ddb94eda5f7",
+    "data/processed/train.parquet": "29de97919f659edcd60cef8c949b2749",
+    "data/processed/val.parquet": "542e84f1aa04b0899b63aa6c9e9d68fa",
     "data/reference/zone_centroids.csv": "79c1bb833dae873054bef4867a70914e",
-    "reports/prepare.json": "648978166c0ce1d59cf830958af3f391"
+    "reports/prepare.json": "6fbcd10dbc4a6a5b41ff74e435d6d77d"
   },
-  "mlflow_run_id": "f6445588bb5c46a2876fdd4387a3a08f",
+  "mlflow_run_id": "435fbfaeb3494d9fa39a365ee8d30faf",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
@@ -70,22 +70,23 @@
   "seed": 42,
   "sklearn_version": "1.9.1",
   "split_boundaries": {
-    "test": "2025-04",
-    "train_first": "2024-10",
-    "train_last": "2025-02",
-    "val": "2025-03"
+    "test": "2026-01",
+    "train_first": "2025-06",
+    "train_last": "2025-11",
+    "val": "2025-12"
   },
   "target": "duration_min",
-  "test_month": "2025-04",
+  "test_month": "2026-01",
   "train_months": [
-    "2024-10",
-    "2024-11",
-    "2024-12",
-    "2025-01",
-    "2025-02"
+    "2025-06",
+    "2025-07",
+    "2025-08",
+    "2025-09",
+    "2025-10",
+    "2025-11"
   ],
-  "train_rows": 17559240,
-  "val_mae_fallback": 3.7391625830155304,
-  "val_mae_model": 3.406976519435697,
-  "val_month": "2025-03"
+  "train_rows": 23461406,
+  "val_mae_fallback": 5.090852015234993,
+  "val_mae_model": 4.718055870262303,
+  "val_month": "2025-12"
 }
