@@ -4,7 +4,7 @@
     "do_borough"
   ],
   "environment": {
-    "container": "tripduration-train:635bc0815de7@sha256:397798af712c21fb1ba528fee476dac1a66beb773f2ec0e4e2065681f1e27764",
+    "container": "tripduration-train:635bc0815de7@sha256:acd92421c0daca0d14155df45741f9be400ac2f1f2dc8629ff35915840a2190c",
     "machine": "x86_64",
     "packages": {
       "numpy": "2.5.3",
@@ -46,15 +46,15 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "be6e18a3e171e571726ef3ed198992e3aaf97be9",
+  "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
   "inputs_md5": {
     "configs/holidays.csv": "63cb7aadeda8ac77ddac8eafac4563f5",
-    "data/processed/train.parquet": "c8a464a33c1db85322a9a6103d57b3fe",
-    "data/processed/val.parquet": "9c64164b93b783d49fd03ddb94eda5f7",
+    "data/processed/train.parquet": "8f9fb53079bc035c34c76c073672ed5d",
+    "data/processed/val.parquet": "4e1d1b8d8697ea9b5d906a25e3c104e1",
     "data/reference/zone_centroids.csv": "79c1bb833dae873054bef4867a70914e",
-    "reports/prepare.json": "648978166c0ce1d59cf830958af3f391"
+    "reports/prepare.json": "10fec7abec9ae0f6f8458b7d4e91712a"
   },
-  "mlflow_run_id": "f6445588bb5c46a2876fdd4387a3a08f",
+  "mlflow_run_id": "507b08979005463a95477e21b990231d",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
@@ -70,22 +70,23 @@
   "seed": 42,
   "sklearn_version": "1.9.1",
   "split_boundaries": {
-    "test": "2025-04",
-    "train_first": "2024-10",
-    "train_last": "2025-02",
-    "val": "2025-03"
+    "test": "2025-07",
+    "train_first": "2024-12",
+    "train_last": "2025-05",
+    "val": "2025-06"
   },
   "target": "duration_min",
-  "test_month": "2025-04",
+  "test_month": "2025-07",
   "train_months": [
-    "2024-10",
-    "2024-11",
     "2024-12",
     "2025-01",
-    "2025-02"
+    "2025-02",
+    "2025-03",
+    "2025-04",
+    "2025-05"
   ],
-  "train_rows": 17559240,
-  "val_mae_fallback": 3.7391625830155304,
-  "val_mae_model": 3.406976519435697,
-  "val_month": "2025-03"
+  "train_rows": 22531407,
+  "val_mae_fallback": 4.10797643787458,
+  "val_mae_model": 3.7746189855393055,
+  "val_month": "2025-06"
 }
