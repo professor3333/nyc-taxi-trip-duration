@@ -50,6 +50,7 @@ def _run(tmp: Path, *, lookup: str, label: str = RID, fresh: str = "false") -> d
         p = bin_dir / name
         p.write_text(f"#!/bin/bash\n{body}\n")
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    (tmp / "scripts").symlink_to(ROOT / "scripts")  # the step calls scripts/*.sh
     env_file, summary = tmp / "env", tmp / "summary"
     env = {
         **os.environ,
