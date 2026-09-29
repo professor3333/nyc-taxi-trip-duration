@@ -4,7 +4,7 @@
     "model_min_sum": 2058.5335829101095,
     "rows": 80
   },
-  "git_sha": "d162ffc548ac133ddde8c47ae484cff455214ff6",
+  "git_sha": "be6e18a3e171e571726ef3ed198992e3aaf97be9",
   "model_beats_fallback_on_test": true,
   "params_hash": "4399ca8445b04f56",
   "test": {

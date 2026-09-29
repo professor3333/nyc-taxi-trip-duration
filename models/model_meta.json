@@ -4,7 +4,7 @@
     "do_borough"
   ],
   "environment": {
-    "container": "tripduration-train:10f6058c0294@sha256:5bb35ad381e61c035391703496a0ce835c8f8812d340d899107d5b5bee863340",
+    "container": "tripduration-train:635bc0815de7@sha256:397798af712c21fb1ba528fee476dac1a66beb773f2ec0e4e2065681f1e27764",
     "machine": "x86_64",
     "packages": {
       "numpy": "2.5.3",
@@ -46,7 +46,7 @@
     "pu_borough",
     "do_borough"
   ],
-  "git_sha": "d162ffc548ac133ddde8c47ae484cff455214ff6",
+  "git_sha": "be6e18a3e171e571726ef3ed198992e3aaf97be9",
   "inputs_md5": {
     "configs/holidays.csv": "63cb7aadeda8ac77ddac8eafac4563f5",
     "data/processed/train.parquet": "c8a464a33c1db85322a9a6103d57b3fe",
@@ -54,7 +54,7 @@
     "data/reference/zone_centroids.csv": "79c1bb833dae873054bef4867a70914e",
     "reports/prepare.json": "648978166c0ce1d59cf830958af3f391"
   },
-  "mlflow_run_id": "693aabcf4bf3495ab951b3525679d2fc",
+  "mlflow_run_id": "f6445588bb5c46a2876fdd4387a3a08f",
   "model_params": {
     "l2_regularization": 1.0,
     "learning_rate": 0.1,
