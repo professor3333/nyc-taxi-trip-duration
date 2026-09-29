@@ -1,0 +1,114 @@
+{
+  "month": "2025-08",
+  "verdict": "pass",
+  "reasons": [],
+  "candidate": {
+    "mae_test_model": 3.5842221718812337,
+    "mae_test_fallback": 3.8588943478859123,
+    "train_months": [
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06"
+    ],
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "model_md5": "4d5370e537f422067b8b1c24676e6d39"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 4.006900083515366
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.10548750975175392,
+      "lower": 0.09185789697555509,
+      "upper": 0.11850233150715002,
+      "days": 31
+    },
+    "slices_checked": 57,
+    "slices_regressed": 0,
+    "worst_slices": [
+      {
+        "family": "route",
+        "slice": "239->238",
+        "n": 5518,
+        "mae_champion": 1.612719832419375,
+        "mae_candidate": 1.6011822932057314,
+        "ratio": 0.9928459122398617,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "186->170",
+        "n": 5331,
+        "mae_champion": 3.250486559585456,
+        "mae_candidate": 3.226553488375316,
+        "ratio": 0.9926370803966061,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "236->236",
+        "n": 8259,
+        "mae_champion": 1.8054826675188247,
+        "mae_candidate": 1.781134468493996,
+        "ratio": 0.9865142992160157,
+        "regressed": false
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Queens->Brooklyn",
+        "n": 65614,
+        "mae_champion": 6.171003359199047,
+        "mae_candidate": 6.036656303997699,
+        "ratio": 0.9782293012365519,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "238->239",
+        "n": 5015,
+        "mae_champion": 1.6228646251988552,
+        "mae_candidate": 1.5822428061343654,
+        "ratio": 0.9749690649276971,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2025-08",
+    "candidate": {
+      "model_md5": "4d5370e537f422067b8b1c24676e6d39",
+      "dvc_lock_md5": "57707fc20ffa5ec48d5342a7e8e0d224"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "017e9326e768392ede14ff8f6c30d7b66dc5481abf82bcd31eee0f21999daef6",
+      "slices_sha256": "2c8ef20b28ea4aae4ac26b7501c21d0f7435359d9f21f7df4bc89a7df3343bc1"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-29T10:01:21+00:00"
+}
