@@ -1,0 +1,120 @@
+{
+  "month": "2025-06",
+  "verdict": "fail",
+  "reasons": [
+    "slice route=132->230 (n=7419) worse by +6.4%: 9.123 -> 9.704 (limit +3.0%)",
+    "slice airport=to_JFK (n=29990) worse by +4.1%: 8.475 -> 8.827 (limit +3.0%)",
+    "slice airport=from_JFK (n=161644) worse by +4.1%: 7.568 -> 7.879 (limit +3.0%)",
+    "slice airport=to_LGA (n=37157) worse by +3.5%: 5.474 -> 5.668 (limit +3.0%)",
+    "slice borough_pair=Queens->Manhattan (n=203516) worse by +3.3%: 6.990 -> 7.222 (limit +3.0%)"
+  ],
+  "candidate": {
+    "mae_test_model": 3.7865731704332894,
+    "mae_test_fallback": 4.147729392969383,
+    "train_months": [
+      "2024-11",
+      "2024-12",
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04"
+    ],
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "model_md5": "709dabb08f64dc8739981d57c2ece1b0"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 3.91010382097768
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.0315926778930139,
+      "lower": 0.011940210034719605,
+      "upper": 0.048193668381823845,
+      "days": 30
+    },
+    "slices_checked": 56,
+    "slices_regressed": 5,
+    "worst_slices": [
+      {
+        "family": "route",
+        "slice": "132->230",
+        "n": 7419,
+        "mae_champion": 9.12266894523474,
+        "mae_candidate": 9.703500631240493,
+        "ratio": 1.0636690522798322,
+        "regressed": true
+      },
+      {
+        "family": "airport",
+        "slice": "to_JFK",
+        "n": 29990,
+        "mae_champion": 8.47543806124822,
+        "mae_candidate": 8.826881451741437,
+        "ratio": 1.0414661033392603,
+        "regressed": true
+      },
+      {
+        "family": "airport",
+        "slice": "from_JFK",
+        "n": 161644,
+        "mae_champion": 7.568069199439442,
+        "mae_candidate": 7.8785701163393185,
+        "ratio": 1.0410277586947638,
+        "regressed": true
+      },
+      {
+        "family": "airport",
+        "slice": "to_LGA",
+        "n": 37157,
+        "mae_champion": 5.474025501446104,
+        "mae_candidate": 5.667852222368588,
+        "ratio": 1.0354084431779282,
+        "regressed": true
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Queens->Manhattan",
+        "n": 203516,
+        "mae_champion": 6.990264695377159,
+        "mae_candidate": 7.2223584234283695,
+        "ratio": 1.0332024233938808,
+        "regressed": true
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2025-06",
+    "candidate": {
+      "model_md5": "709dabb08f64dc8739981d57c2ece1b0",
+      "dvc_lock_md5": "996ed944b8f1f790e8a8f02b23f49e6b"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "72d0461b48ea5a3880cd4161ffd59d2b86ca18cf3f55e05ee86aa71e3d898feb",
+      "slices_sha256": "88a9c20fda0360e6c4701925395dffdb4c2982b5a51f578a78f46e57f423fad2"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-29T09:35:29+00:00"
+}
