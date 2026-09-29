@@ -9,7 +9,7 @@ estimated travel time in minutes and the model version that produced it.
 
 ```
 POST /predict {"pickup_zone_id": 132, "dropoff_zone_id": 161, "departure_time": "2024-12-10T17:30:00"}
- -> {"duration_min": 66.75, "model_version": "v3", "model_kind": "model", "fallback_version": "fb-…", "request_id": "…"}
+ -> {"duration_min": 62.30, "model_version": "v1", "model_kind": "model", "fallback_version": "fb-…", "request_id": "…"}
 ```
 
 The point of the project is the **system**, not the model: reproducible data
@@ -35,7 +35,8 @@ Full diagram and the real-vs-scripted table: [`docs/architecture.md`](docs/archi
 ## Status (2026-09-23)
 
 **Live on AWS** (us-east-1): a Lambda container behind an IAM-authenticated
-Function URL, serving champion **v3**. It is deployed by `deploy.yml`, which
+Function URL, serving champion **v1** (rolled back from v3 in #72; checked daily by
+`monitor.yml` against `models/champion.json`). It is deployed by `deploy.yml`, which
 gates on a vulnerability scan and restores the previous image automatically
 when a post-deploy check fails (proven: run 35887599074). It is watched daily
 by `monitor.yml`, and by 14 CloudWatch alarms whose e-mail subscription still
@@ -46,7 +47,7 @@ will be torn down before the plan ends on 2027-03-22 ([`docs/cost.md`](docs/cost
 |---|---|
 | **Data** | 7 yellow months, 2024-10 … 2025-04 (26.3M rows), as byte-identical copies under DVC (S3 remote); every input can also be rebuilt from TLC and checked against its pointer |
 | **Pipeline** | `dvc repro`: validate (ADR-0002 rules with per-rule counts) → quality (acceptance rules that stop the graph) → prepare (ADR-0003 rolling split, ADR-0005 features, post-trip columns dropped) → train (HGBR + fallback table, MLflow run) → evaluate |
-| **Result** | serving champion v3: test MAE **3.79 min** on 2025-01 vs fallback 3.99. The committed pipeline outputs (test 2025-04: model 3.51, fallback 3.88) reproduce **bit for bit** from a clean clone |
+| **Result** | serving champion v1 (trained on 2024-10): test MAE **4.69 min** on 2024-12 vs fallback 5.11; it is stale (issue #63). The committed pipeline outputs (test 2025-04: model 3.51, fallback 3.88) reproduce **bit for bit** from a clean clone |
 | **Registry** | MLflow + Postgres on Compose; gated `make promote`, `make rollback` and interrupted-operation recovery; `docs/promotions.md`; backups with a verified restore |
 | **Serving** | FastAPI in a ~200 MB `python:3.12-slim` image with the Lambda Web Adapter; per-request fallback to the baseline; 422 with field messages for every bad input; one JSON log line per request |
 | **CI** | ruff, mypy, pinned shellcheck and actionlint, dependency and image vulnerability gates, the test suite, the real DVC graph on fixtures, container smoke with a cold-start check, and a registry backup/restore drill. Branch protection on `main` requires `ci` |
