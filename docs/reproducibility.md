@@ -18,7 +18,7 @@ only if every prediction is bit-identical and every metric is equal.
 | Split boundaries | `model_meta.json › split_boundaries` and `train_months` / `val_month` / `test_month`; derived by ADR-0003's rule, never hand-listed |
 | Locked dependencies | `uv.lock` in git; `model_meta.json › environment.uv_lock_md5` pins the exact set `uv sync --frozen` installs; key package versions recorded alongside |
 | Training environment | `environment.platform`, `machine`, `python_version`, `packages`, `thread_env` (OMP/OPENBLAS/MKL) |
-| Training container | `environment.container`: `tripduration-train:<hash of Dockerfile + uv.lock>@<image id>`, set by `scripts/train_env.sh`. Empty means the run was **not** in the canonical environment and its outputs should not be committed |
+| Training container | `environment.container`: `tripduration-train:<hash of configs/training_env.txt + uv.lock>@<image id>`, set by `scripts/train_env.sh`. Empty means the run was **not** in the canonical environment and its outputs should not be committed |
 | Metrics | `metrics/eval.json`: MAE, MAPE, RMSE, P90 absolute error, bias, n — for the model **and** the fallback, on validation and test |
 | Tail errors | P90 absolute error per split; `quality` reports the duration bands and p99/p99.9 of the input distribution |
 | Results by hour | `reports/eval/{val,test}_mae_by_hour.csv` |
@@ -170,3 +170,16 @@ trained in the canonical environment can be checked at the API's rounding
   same artefacts (66.75 min for v3, 62.30 for v1). This is train/serve parity
   rather than run-to-run reproducibility, and it caught a real mismatch when
   the wrong metadata was baked into an image.
+
+## The training environment is a pipeline input (2026-09-29)
+
+`configs/training_env.txt` is the Dockerfile's `train` target (the stage, the
+stages it copies from, the global ARGs they use; comments dropped), generated
+by `python3 scripts/training_env.py`. Every `dvc.yaml` stage depends on it, so
+changing the pinned base image (glibc/libm) or the train stage makes
+`dvc repro` re-run everything instead of reusing outputs produced under the
+old environment. Before this, only `make reproduce` (which forces) noticed.
+`scripts/train_env.sh` keys its image on the same file and refuses to run
+when it is stale; `tests/test_training_env.py` keeps it equal to the
+Dockerfile, and `tests/test_dvc_deps.py` proves a change stales every stage.
+Serving-only Dockerfile edits (runtime stage, Lambda adapter) do not change it.
