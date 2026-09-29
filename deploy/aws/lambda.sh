@@ -10,11 +10,20 @@
 # ("memory 1024 -> 3008") and corrected, and a run with no drift changes
 # nothing. Needs jq.
 #
-# LAMBDA_RELEASE_MODE=alias (env.sh) is the one-time migration to verified
-# releases: publishes a version of IMAGE_URI, creates alias `live` on it (once;
-# afterwards deploy.yml owns the alias), serves the Function URL and its grants
-# from `live`, and deletes the unqualified URL, which would otherwise expose
-# $LATEST - where deploy.yml puts candidates before they are verified.
+# deploy/release_mode = alias (env.sh reads it; the one source of the mode)
+# is the migration to verified releases: publishes a version of IMAGE_URI,
+# creates alias `live` on it (once; afterwards deploy.yml owns the alias),
+# serves the Function URL and its grants from `live`, and deletes the
+# unqualified URL, which would otherwise expose $LATEST - where deploy.yml
+# puts candidates before they are verified. Every later run in alias mode
+# keeps it deleted.
+#
+# URL grants in the resource policy exist only for the legacy single GitHub
+# role (ADR-0013): the four per-workflow roles carry InvokeFunctionUrl and
+# InvokeFunction in their identity policies, which suffices in-account with
+# AWS_IAM. Once the legacy role is retired (iam.sh --retire-legacy) its
+# statements are revoked here, from the URL's qualifier and the unqualified
+# function alike.
 source "$(dirname "$0")/env.sh"
 IMAGE_URI="${1:?image uri required}"
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
@@ -119,14 +128,28 @@ revoke() {
   fi
 }
 GH_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${GH_OIDC_ROLE_NAME}"
+# Does the legacy role still exist? NoSuchEntity = retired; any other error
+# (e.g. access denied) stops here rather than guessing.
+if ERR=$(aws iam get-role --role-name "$GH_OIDC_ROLE_NAME" 2>&1 >/dev/null); then
+  LEGACY_ROLE=present
+elif grep -q NoSuchEntity <<<"$ERR"; then
+  LEGACY_ROLE=retired
+else
+  echo "cannot tell whether $GH_OIDC_ROLE_NAME exists: $ERR" >&2; exit 1
+fi
 if [ "$LAMBDA_URL_AUTH_TYPE" = "NONE" ]; then
   revoke github-actions-url; revoke github-actions-invoke
   grant public-url lambda:InvokeFunctionUrl '*' --function-url-auth-type NONE
   grant public-invoke lambda:InvokeFunction '*' --invoked-via-function-url
 else
   revoke public-url; revoke public-invoke
-  grant github-actions-url lambda:InvokeFunctionUrl "$GH_ROLE_ARN" --function-url-auth-type AWS_IAM
-  grant github-actions-invoke lambda:InvokeFunction "$GH_ROLE_ARN" --invoked-via-function-url
+  if [ "$LEGACY_ROLE" = "present" ]; then
+    grant github-actions-url lambda:InvokeFunctionUrl "$GH_ROLE_ARN" --function-url-auth-type AWS_IAM
+    grant github-actions-invoke lambda:InvokeFunction "$GH_ROLE_ARN" --invoked-via-function-url
+  else
+    revoke github-actions-url; revoke github-actions-invoke
+    log "legacy role $GH_OIDC_ROLE_NAME retired: no resource-policy grants (roles use identity policies)"
+  fi
 fi
 if [ "$LAMBDA_RELEASE_MODE" = "alias" ]; then
   # The unqualified URL would serve $LATEST, i.e. unverified candidates.
@@ -137,6 +160,19 @@ if [ "$LAMBDA_RELEASE_MODE" = "alias" ]; then
   for sid in public-url public-invoke github-actions-url github-actions-invoke; do
     if aws lambda remove-permission "${FN[@]}" --statement-id "$sid" >/dev/null 2>&1; then
       log "revoked unqualified $sid"
+    fi
+  done
+fi
+if [ "$LAMBDA_RELEASE_MODE" = "latest" ] && aws lambda get-alias "${FN[@]}" --name live >/dev/null 2>&1; then
+  # Back from alias mode: exactly one URL, the unqualified one. A URL left on
+  # `live` would keep serving an old version beside it, with its grants.
+  if aws lambda get-function-url-config "${FN[@]}" --qualifier live >/dev/null 2>&1; then
+    aws lambda delete-function-url-config "${FN[@]}" --qualifier live
+    log "deleted the Function URL of alias live (release mode latest)"
+  fi
+  for sid in public-url public-invoke github-actions-url github-actions-invoke; do
+    if aws lambda remove-permission "${FN[@]}" --qualifier live --statement-id "$sid" >/dev/null 2>&1; then
+      log "revoked $sid on live"
     fi
   done
 fi

@@ -44,7 +44,9 @@ manifest refuses artefacts whose md5 differs from the champion record.
 `/version` reports `release_id`, and an unreadable manifest makes the
 service `degraded`.
 
-**The ledger** (`scripts/releases.py`, `s3://<bucket>/releases/`).
+**The ledger** (`scripts/releases.py`, `s3://<bucket>/releases/`). *Superseded
+in part by the 2026-09-29 amendment below: records are per deployment, with
+activation outcomes.*
 - `<release_id>.json`: the manifest; the image digest and Lambda version (where
   the release runs); the predictions it actually served on the 80-row grid,
   recorded by `deploy_check --record-predictions` (what it does); the run URL;
@@ -133,6 +135,60 @@ Tests: `tests/test_release_image_reuse.py` runs the step script under
 a single build under the content tag, a label of another release refused, a
 denied lookup refused, and a fresh-build unique tag. Checked on a real local
 build: the label, the manifest and the baked `release.json` carry the same id.
+
+## Amendment, 2026-09-29 — deployments, activation outcomes, configuration
+
+**Findings (external review of 492f209).**
+1. The cold-start check was demanded whenever the candidate version differed
+   from the live one. A restored, *existing* version may still have a warm
+   environment (AWS reuses environments per version), so a healthy rollback
+   could fail `requests_before == 0`.
+2. One record per `release_id` was overwritten by a `fresh_build`: the
+   top-level image and the prediction CSV were replaced; history kept only
+   hashes, not the CSV a restore replays.
+3. A deployment was recorded after the Lambda-API check and before the alias
+   move / URL check, and `find` picked it even when that activation then
+   failed.
+4. A restore whose recorded version was gone republished the image from
+   `$LATEST` under whatever configuration `$LATEST` had, so the same release
+   id could run with other memory, timeout or environment (e.g. API limits).
+
+**Decision.**
+- A **deployment** is one concrete (image digest, Lambda version or
+  `latest`, behaviour-relevant configuration) of a release, stored
+  immutably at `releases/deployments/<release_id>/<deployment_id>.json`
+  with its own served predictions. The configuration snapshot is
+  `MemorySize, Timeout, EphemeralStorage, Environment, Architectures,
+  ImageConfig`; the execution role and log settings are infrastructure
+  owned by `deploy/aws/*.sh` and are not part of a release.
+- Events `verified` / `activated` / `activation_failed`. `find` (the default
+  rollback) returns the most recently activated deployment whose last event
+  is not a failure. An explicit `<release_id>/<deployment_id>` can still
+  restore any recorded deployment, with a warning.
+- **Configuration is not rewritten by deploy.yml.** A restore runs the
+  recorded version when it still runs the recorded image (versions are
+  immutable). Otherwise it publishes a replacement only when `$LATEST`'s
+  configuration equals the recorded snapshot, and verifies the published
+  version's configuration too; a difference stops the run before any change
+  and names the differing fields. Rejected alternative: have deploy.yml
+  apply the recorded configuration. That would give two writers of Lambda
+  configuration (lambda.sh reconciles to `env.sh`), and a restore would
+  silently undo a deliberate configuration change.
+- **Cold start is required only for a version this run created**
+  (not in `list-versions-by-function` before `publish-version`). An existing
+  version is verified by release id, `/ready` and the recorded predictions
+  at tolerance 0.
+
+The ledger had never been seeded (every deploy so far ran on the legacy
+role), so there is no old-format data to migrate.
+
+Tests: `tests/test_releases.py` (per-deployment immutability, activation
+outcomes, config snapshot/diff), `tests/test_deploy_sequence.py` (the real
+alias-mode candidate step against a fake Lambda: warm restore not cold, new
+version cold, unchanged republish not cold, missing version under changed
+config refused before any change, under recorded config republished),
+`tests/test_workflows.py` (record → alias → URL → drill → activate order;
+failed activation recorded).
 
 ## Consequences
 

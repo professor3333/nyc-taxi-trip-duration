@@ -39,10 +39,25 @@ export LAMBDA_ENV_JSON="${LAMBDA_ENV_JSON:-$DEFAULT_LAMBDA_ENV_JSON}"
 export LAMBDA_RESERVED_CONCURRENCY="${LAMBDA_RESERVED_CONCURRENCY:-5}"
 # AWS_IAM: this account blocks public function URLs (ADR-0008 amendment 2026-09-22).
 export LAMBDA_URL_AUTH_TYPE="${LAMBDA_URL_AUTH_TYPE:-AWS_IAM}"
+# The release mode has ONE source: the committed file deploy/release_mode,
+# read by this script (lambda.sh), deploy.yml and monitor.yml alike, so a
+# later ordinary `lambda.sh` run cannot fall back to another mode.
 # latest: the Function URL serves the unqualified function, updated in place.
 # alias:  the URL serves alias `live`; deploy.yml publishes a version, verifies
 #         it with no traffic, then moves the alias (ADR-0008 "verified release").
-#         Set together with the repository variable RELEASE_MODE=alias.
-export LAMBDA_RELEASE_MODE="${LAMBDA_RELEASE_MODE:-latest}"
+#         The unqualified URL (it would serve $LATEST) is kept absent.
+# An environment override that disagrees with the file is refused: change the
+# file (and commit it) instead. RELEASE_MODE_FILE exists for tests.
+RELEASE_MODE_FILE="${RELEASE_MODE_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/release_mode}"
+FILE_MODE=$(tr -d '[:space:]' <"$RELEASE_MODE_FILE")
+case "$FILE_MODE" in
+  latest|alias) ;;
+  *) echo "$RELEASE_MODE_FILE must say latest or alias, not '$FILE_MODE'" >&2; exit 1 ;;
+esac
+if [ -n "${LAMBDA_RELEASE_MODE:-}" ] && [ "$LAMBDA_RELEASE_MODE" != "$FILE_MODE" ]; then
+  echo "LAMBDA_RELEASE_MODE=$LAMBDA_RELEASE_MODE disagrees with $RELEASE_MODE_FILE ($FILE_MODE); edit the file instead" >&2
+  exit 1
+fi
+export LAMBDA_RELEASE_MODE="$FILE_MODE"
 
 log() { printf '\033[1;34m[%s]\033[0m %s\n' "$(basename "$0" .sh)" "$*"; }

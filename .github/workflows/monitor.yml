@@ -26,15 +26,22 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     env:
-      # In alias mode (deploy.yml) callers are served by the `live` alias;
-      # the unqualified function ($LATEST) may hold a rejected candidate.
-      TARGET: ${{ secrets.LAMBDA_FUNCTION_NAME }}${{ vars.RELEASE_MODE == 'alias' && ':live' || '' }}
-      URL_QUALIFIER: ${{ vars.RELEASE_MODE == 'alias' && 'live' || '' }}
+      FN: ${{ secrets.LAMBDA_FUNCTION_NAME }}
       # releases/live.json (ADR-0014) needs the ADR-0013 monitor role.
       LEDGER: ${{ secrets.AWS_MONITOR_ROLE_ARN != '' }}
       BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
       - uses: actions/checkout@v5
+      # In alias mode (deploy/release_mode, the one source) callers are served
+      # by the `live` alias; the unqualified function ($LATEST) may hold a
+      # rejected candidate.
+      - name: Read the release mode
+        run: |
+          case "$(tr -d '[:space:]' < deploy/release_mode)" in
+            alias)  { echo "TARGET=$FN:live"; echo "URL_QUALIFIER=live"; } >> "$GITHUB_ENV" ;;
+            latest) { echo "TARGET=$FN"; echo "URL_QUALIFIER="; } >> "$GITHUB_ENV" ;;
+            *) echo "::error::deploy/release_mode must say latest or alias"; exit 1 ;;
+          esac
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --frozen --group train -q   # boto3, for SigV4
 
