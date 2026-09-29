@@ -236,6 +236,7 @@ def test_iam_sh_prints_one_secret_per_workflow(tmp_path: Path) -> None:
         "AWS_RETRAIN_ROLE_ARN",
         "AWS_REPRODUCE_ROLE_ARN",
         "AWS_MONITOR_ROLE_ARN",
+        "AWS_CI_ROLE_ARN",
     ):
         assert f"{secret}=arn:aws:iam::123456789012:role/" in out
 
@@ -353,3 +354,30 @@ def test_every_lambda_cli_call_in_a_workflow_is_granted(
 ) -> None:
     missing = _cli_actions(workflow) - _actions(roles[ROLE.format(role)])
     assert not missing, f"{role} role lacks {sorted(missing)}"
+
+
+def test_ci_role_trusts_exactly_prs_and_main_and_can_only_get_a_pull_token(
+    roles: dict[str, Any],
+) -> None:
+    """Public ECR throttled anonymous pulls from shared runner IPs (429 Data
+    limit exceeded); CI logs in with a role that can do nothing else."""
+    role = roles[ROLE.format("ci")]
+    (st,) = role["trust"]["Statement"]
+    sub = st["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"]
+    assert sub == [f"{PREFIX}:pull_request", f"{PREFIX}:ref:refs/heads/main"]
+    assert "StringLike" not in st["Condition"]  # exact subjects, no wildcards
+    assert _actions(role) == {
+        "ecr-public:GetAuthorizationToken",
+        "sts:GetServiceBearerToken",
+    }
+
+
+def test_ci_login_is_optional_and_never_fails_the_build() -> None:
+    job = _wf("ci.yml")["jobs"]["ci"]
+    assert _wf("ci.yml")["permissions"]["id-token"] == "write"
+    (creds,) = [
+        s for s in job["steps"] if "configure-aws-credentials" in str(s.get("uses"))
+    ]
+    assert creds["with"]["role-to-assume"] == "${{ secrets.AWS_CI_ROLE_ARN }}"
+    assert creds["continue-on-error"] is True
+    assert creds["if"] == "env.HAS_CI_ROLE == 'true'"

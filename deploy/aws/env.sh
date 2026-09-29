@@ -18,6 +18,7 @@ export GHA_DEPLOY_ROLE="${PROJECT}-gha-deploy"
 export GHA_RETRAIN_ROLE="${PROJECT}-gha-retrain"
 export GHA_REPRODUCE_ROLE="${PROJECT}-gha-reproduce"
 export GHA_MONITOR_ROLE="${PROJECT}-gha-monitor"
+export GHA_CI_ROLE="${PROJECT}-gha-ci"
 export GITHUB_REPO="${GITHUB_REPO:-professor3333/nyc-taxi-trip-duration}"
 # GitHub now puts numeric ids in the OIDC `sub` claim:
 #   repo:<owner>@<owner_id>/<name>@<repo_id>:environment:production

@@ -7,6 +7,7 @@
 #   retrain     environment:retrain    (main only)    read + write dvc/
 #   reproduce   environment:reproduce  (reviewer)     read + write dvc/
 #   monitor     ref:refs/heads/main                   invoke the function and its URL; nothing else
+#   ci          pull_request, ref:refs/heads/main     a public-ECR pull token; nothing in the account
 #
 # Subjects are matched with StringEquals on the id-based form
 # (repo:owner@id/name@id:…), which survives renames and cannot be claimed by a
@@ -42,7 +43,18 @@ case "$GITHUB_OWNER_ID$GITHUB_REPO_ID" in
   *'*'*) echo "GitHub owner/repo ids unknown (gh api failed); set GITHUB_OWNER_ID and GITHUB_REPO_ID" >&2; exit 1 ;;
 esac
 
-render_trust() { render "$IAM_DIR/gha-trust.json" | sed -e "s#OIDC_CONTEXT#$1#"; }
+# One context, or several separated by commas (then `sub` is a list, still
+# StringEquals: each entry is an exact subject, no wildcards).
+render_trust() {
+  local doc; doc=$(render "$IAM_DIR/gha-trust.json" | sed -e "s#OIDC_CONTEXT#$1#")
+  case "$1" in
+    *,*)
+      local prefix="repo:${GITHUB_OWNER}@${GITHUB_OWNER_ID}/${GITHUB_NAME}@${GITHUB_REPO_ID}:"
+      jq --arg p "$prefix" --arg c "$1" \
+        '.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] = ($c | split(",") | map($p + .))' <<<"$doc" ;;
+    *) printf '%s\n' "$doc" ;;
+  esac
+}
 
 upsert_gha_role() {  # name  oidc-context  policy-file
   local name="$1" context="$2" policy="$3"
@@ -72,9 +84,14 @@ upsert_gha_role "$GHA_DEPLOY_ROLE"    "environment:production" gha-deploy-policy
 upsert_gha_role "$GHA_RETRAIN_ROLE"   "environment:retrain"    gha-retrain-policy.json
 upsert_gha_role "$GHA_REPRODUCE_ROLE" "environment:reproduce"  gha-reproduce-policy.json
 upsert_gha_role "$GHA_MONITOR_ROLE"   "ref:refs/heads/main"    gha-monitor-policy.json
+# CI builds the image on every PR and push; anonymous public-ECR pulls from
+# shared runner IPs hit the per-IP monthly data limit (429). This role only
+# yields a pull token for public registries. Fork PRs get no OIDC token.
+upsert_gha_role "$GHA_CI_ROLE"        "pull_request,ref:refs/heads/main" gha-ci-policy.json
 
 echo "AWS_DEPLOY_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GHA_DEPLOY_ROLE}"
 echo "AWS_RETRAIN_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GHA_RETRAIN_ROLE}"
 echo "AWS_REPRODUCE_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GHA_REPRODUCE_ROLE}"
 echo "AWS_MONITOR_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GHA_MONITOR_ROLE}"
+echo "AWS_CI_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${GHA_CI_ROLE}"
 echo "LAMBDA_ROLE_ARN=arn:aws:iam::${ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
