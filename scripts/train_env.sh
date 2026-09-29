@@ -8,8 +8,11 @@
 #   scripts/train_env.sh uv run dvc repro
 #   TRAIN_ENV_NETWORK=none scripts/train_env.sh uv run dvc repro --force
 #
-# The image tag is a hash of Dockerfile + uv.lock, so a dependency or base
-# change builds a new image and an unchanged one is reused. The checkout is
+# The image tag is a hash of configs/training_env.txt (the Dockerfile's
+# `train` target, which every DVC stage also depends on) + uv.lock, so a
+# dependency or base change builds a new image AND makes `dvc repro` re-run
+# every stage; an unchanged one is reused. A stale training_env.txt stops
+# here: the image would differ from what DVC believes produced the outputs. The checkout is
 # mounted at /work and imported from there: the code that runs is the code
 # in the checkout. TRAINING_IMAGE (recorded in model_meta.json) names the
 # exact image id.
@@ -18,7 +21,8 @@ set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
 PLATFORM=linux/amd64
-KEY=$(cat "$ROOT/Dockerfile" "$ROOT/uv.lock" | shasum -a 256 | cut -c1-12)
+python3 "$ROOT/scripts/training_env.py" --check
+KEY=$(cat "$ROOT/configs/training_env.txt" "$ROOT/uv.lock" | shasum -a 256 | cut -c1-12)
 IMAGE="tripduration-train:$KEY"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then

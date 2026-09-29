@@ -4,8 +4,10 @@
 #
 # Every input that can change a stage's output is declared (audit:
 # docs/pipeline_inputs.md; enforced by tests/test_dvc_deps.py):
-#   - the environment: uv.lock (every resolved package version) and
-#     .python-version (the interpreter). pyproject.toml is deliberately NOT a
+#   - the environment: uv.lock (every resolved package version),
+#     .python-version (the interpreter) and configs/training_env.txt (the
+#     Dockerfile's `train` target: base image by digest, so glibc/libm; kept
+#     equal to the Dockerfile by scripts/training_env.py and its test). pyproject.toml is deliberately NOT a
 #     dep - `uv run --locked` refuses to run when uv.lock is stale against it,
 #     so a dependency edit cannot reach a stage without changing uv.lock, and
 #     lint/test config edits do not retrain the model;
@@ -21,6 +23,7 @@ stages:
       - src/tripduration/config.py
       - uv.lock
       - .python-version
+      - configs/training_env.txt
       - configs/schema_raw.yaml
       - ${data.raw_dir}
     params:
@@ -43,6 +46,7 @@ stages:
       - src/tripduration/config.py
       - uv.lock
       - .python-version
+      - configs/training_env.txt
       - configs/schema_raw.yaml
       - ${data.raw_dir}
       - ${data.validated_dir}
@@ -60,6 +64,7 @@ stages:
     deps:
       - uv.lock
       - .python-version
+      - configs/training_env.txt
       - src/tripduration/prepare.py
       - src/tripduration/features.py
       - src/tripduration/schema.py
@@ -86,6 +91,7 @@ stages:
     deps:
       - uv.lock
       - .python-version
+      - configs/training_env.txt
       - src/tripduration/train.py
       - src/tripduration/fallback.py
       - src/tripduration/features.py
@@ -114,6 +120,7 @@ stages:
     deps:
       - uv.lock
       - .python-version
+      - configs/training_env.txt
       - src/tripduration/evaluate.py
       - src/tripduration/slices.py
       - src/tripduration/fallback.py

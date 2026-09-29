@@ -26,7 +26,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "tripduration"
 STAGES = ("validate", "quality", "prepare", "train", "evaluate")
-ENV_DEPS = {"uv.lock", ".python-version"}
+ENV_DEPS = {"uv.lock", ".python-version", "configs/training_env.txt"}
 # Params attributes whose params.yaml key is spelled differently.
 ALIASES = {"mlflow_experiment": "mlflow.experiment"}
 
@@ -213,6 +213,12 @@ ALL = set(STAGES)
 CASES = [
     ("uv.lock", "uv.lock", lambda t: t + "# new package version\n", ALL),
     (".python-version", ".python-version", lambda t: "3.13\n", ALL),
+    (
+        "training image",
+        "configs/training_env.txt",
+        lambda t: t + "ARG PYTHON_IMAGE=python:3.12-slim@sha256:0000\n",
+        ALL,
+    ),
     (
         "data.reference_dir",
         "params.yaml",
