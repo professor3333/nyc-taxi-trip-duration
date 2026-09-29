@@ -1,0 +1,114 @@
+{
+  "month": "2025-07",
+  "verdict": "pass",
+  "reasons": [],
+  "candidate": {
+    "mae_test_model": 3.673362563650919,
+    "mae_test_fallback": 4.039254514505265,
+    "train_months": [
+      "2024-12",
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05"
+    ],
+    "git_sha": "cf40df8f4e986bcbafb7ccd07655d15c59f71a1a",
+    "model_md5": "d8841d2c24d3c956aed6e3e50c28d1c1"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 3.9877921608470155
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.07884804034754678,
+      "lower": 0.06107385095606092,
+      "upper": 0.09809217661050654,
+      "days": 31
+    },
+    "slices_checked": 56,
+    "slices_regressed": 0,
+    "worst_slices": [
+      {
+        "family": "route",
+        "slice": "161->230",
+        "n": 5866,
+        "mae_champion": 3.8366936930791264,
+        "mae_candidate": 3.8338552695581134,
+        "ratio": 0.9992601902189552,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "236->236",
+        "n": 10194,
+        "mae_champion": 1.8136302132109643,
+        "mae_candidate": 1.7989498326602025,
+        "ratio": 0.9919055271334664,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "161->161",
+        "n": 6550,
+        "mae_champion": 3.4340342964047657,
+        "mae_candidate": 3.4008316434299823,
+        "ratio": 0.9903312983770882,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "239->238",
+        "n": 6283,
+        "mae_champion": 1.6419600520052628,
+        "mae_candidate": 1.6200312493522204,
+        "ratio": 0.9866447404574419,
+        "regressed": false
+      },
+      {
+        "family": "airport",
+        "slice": "to_EWR",
+        "n": 5911,
+        "mae_champion": 8.160839128861202,
+        "mae_candidate": 8.043329474527056,
+        "ratio": 0.9856007878015182,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2025-07",
+    "candidate": {
+      "model_md5": "d8841d2c24d3c956aed6e3e50c28d1c1",
+      "dvc_lock_md5": "429d28d30adf683c6ea003df723e8b38"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "a042d21fefc405c86dff017640683fc9f06c24c800b1f1931ad73dc429e6034b",
+      "slices_sha256": "c10d78f6245cb3a24ee1042688dbedda9a4414a3bfe9d66ffe09d402a4656ad6"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-29T09:48:39+00:00"
+}
