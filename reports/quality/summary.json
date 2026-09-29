@@ -7,7 +7,14 @@
     "2025-01",
     "2025-02",
     "2025-03",
-    "2025-04"
+    "2025-04",
+    "2025-05",
+    "2025-06",
+    "2025-07",
+    "2025-08",
+    "2025-09",
+    "2025-10",
+    "2025-11"
   ],
   "passed": true,
   "per_month": {
@@ -73,8 +80,71 @@
       "removed_over_180_min": 1593,
       "rows_raw": 3970553,
       "rows_valid": 3805957
+    },
+    "2025-05": {
+      "p50_min": 14.083,
+      "p99_min": 74.483,
+      "reject_rate": 0.045494,
+      "removed_at_or_below_0_min": 64272,
+      "removed_over_180_min": 1530,
+      "rows_raw": 4591845,
+      "rows_valid": 4382945
+    },
+    "2025-06": {
+      "p50_min": 13.8,
+      "p99_min": 71.217,
+      "reject_rate": 0.047836,
+      "removed_at_or_below_0_min": 68583,
+      "removed_over_180_min": 1380,
+      "rows_raw": 4322960,
+      "rows_valid": 4116168
+    },
+    "2025-07": {
+      "p50_min": 13.717,
+      "p99_min": 67.767,
+      "reject_rate": 0.0496,
+      "removed_at_or_below_0_min": 56064,
+      "removed_over_180_min": 1218,
+      "rows_raw": 3898963,
+      "rows_valid": 3705574
+    },
+    "2025-08": {
+      "p50_min": 13.65,
+      "p99_min": 68.8,
+      "reject_rate": 0.052441,
+      "removed_at_or_below_0_min": 47833,
+      "removed_over_180_min": 1282,
+      "rows_raw": 3574091,
+      "rows_valid": 3386662
+    },
+    "2025-09": {
+      "p50_min": 14.733,
+      "p99_min": 74.6,
+      "reject_rate": 0.047369,
+      "removed_at_or_below_0_min": 57179,
+      "removed_over_180_min": 1565,
+      "rows_raw": 4251015,
+      "rows_valid": 4049648
+    },
+    "2025-10": {
+      "p50_min": 14.75,
+      "p99_min": 76.417,
+      "reject_rate": 0.046421,
+      "removed_at_or_below_0_min": 67968,
+      "removed_over_180_min": 1686,
+      "rows_raw": 4428699,
+      "rows_valid": 4223115
+    },
+    "2025-11": {
+      "p50_min": 14.6,
+      "p99_min": 75.433,
+      "reject_rate": 0.048119,
+      "removed_at_or_below_0_min": 62120,
+      "removed_over_180_min": 1735,
+      "rows_raw": 4181444,
+      "rows_valid": 3980239
     }
   },
-  "rows_raw_total": 26317090,
-  "rows_valid_total": 25344071
+  "rows_raw_total": 55566107,
+  "rows_valid_total": 53188422
 }
