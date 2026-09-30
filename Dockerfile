@@ -7,6 +7,10 @@
 #
 # Lambda: the AWS Lambda Web Adapter extension forwards Lambda events to the
 # uvicorn server on 8080, so the same CMD works in both environments.
+# AWS_LWA_ASYNC_INIT: if the app is not ready 9.8 s into Lambda's 10 s init
+# window, the adapter ends init itself and keeps polling inside the first
+# invoke, instead of Lambda killing init and running it again (ADR-0008,
+# amendment 2026-09-30).
 #
 # The `train` target is the canonical TRAINING environment: the same pinned
 # base (so the same glibc/libm), the same uv.lock, linux/amd64 like Lambda.
@@ -103,6 +107,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     GIT_SHA=${GIT_SHA} \
     AWS_LWA_PORT=8080 \
     AWS_LWA_READINESS_CHECK_PATH=/health/live \
+    AWS_LWA_ASYNC_INIT=true \
     OMP_NUM_THREADS=2
 USER app
 EXPOSE 8080

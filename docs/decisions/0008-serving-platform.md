@@ -301,3 +301,29 @@ Failed path then rests on the simulation tests.
 - Auth `NONE` means anyone with the URL can call it; reserved concurrency and
   the $5 budget bound the damage. IAM auth is the switch if it is ever abused.
 - Fargate remains documented as the always-on alternative in `docs/cost.md`.
+
+## Amendment, 2026-09-30 — cold start: stop Lambda from restarting init
+
+**Problem (amendment 2026-09-23).** Every cold start ran the app's init for
+Lambda's full 10 s limit, was killed (`INIT_REPORT … Status: timeout`), and
+ran init again inside the first invoke: ~16 s to the first answer, and the
+`InitFailures` alarm on every cold start. Measured in the serving image
+(linux/amd64, emulated): imports ~1.9 s, `Predictor` build ~3.8 s; on Lambda
+the lazily fetched image layers stretch that past the 10 s window.
+
+**Options, cheapest first.**
+1. `AWS_LWA_ASYNC_INIT=true` (Web Adapter ≥ 0.8, pinned 0.9.1). The adapter
+   polls readiness for up to 9.8 s; if the app is not ready it reports init
+   complete itself and keeps polling inside the first invoke. The *same*
+   process continues: no kill, no second init. One line of config, no app
+   code change.
+2. Load the model on a background thread after the server binds. Faster
+   init, but every route then has to wait on a load event, and the tests
+   that inspect `app.state.predictor` race with it.
+3. A slimmer image (fewer bytes to fetch). Worth doing only if 1 is not
+   enough.
+
+**Decision.** Option 1. Expected: no `Status: timeout` and a cold first
+answer of roughly one init (~6–10 s), not two. `deploy_check --cold` on the
+next deploy records the real number below; if init still times out, option 2
+is next.
