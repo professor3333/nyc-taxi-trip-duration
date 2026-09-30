@@ -71,6 +71,16 @@ LABEL org.opencontainers.image.source="https://github.com/professor3333/nyc-taxi
 
 COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 
+# Security fixes for the serving image only, named packages only. A blanket
+# `apt-get upgrade` could move libc6 (libm) away from the `train` target and
+# break train/serve parity; the train target is untouched, so
+# configs/training_env.txt and dvc.lock stay valid. Trivy (ci.yml, deploy.yml)
+# is what tells us when this list needs a new entry.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+       libssl3t64 openssl openssl-provider-legacy \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --system --uid 10001 --create-home app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
