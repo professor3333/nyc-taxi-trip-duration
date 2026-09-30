@@ -1,0 +1,114 @@
+{
+  "month": "2026-04",
+  "verdict": "pass",
+  "reasons": [],
+  "candidate": {
+    "mae_test_model": 4.073602366733473,
+    "mae_test_fallback": 4.391968072314169,
+    "train_months": [
+      "2025-09",
+      "2025-10",
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02"
+    ],
+    "git_sha": "494a38221a875e9c09938e7b783cf65782c5f57f",
+    "model_md5": "10a11f7f848ae6dbd22a11ac82dac346"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 4.190574889517374
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.027913240036947173,
+      "lower": 0.013872821382254465,
+      "upper": 0.04032106144724233,
+      "days": 30
+    },
+    "slices_checked": 57,
+    "slices_regressed": 0,
+    "worst_slices": [
+      {
+        "family": "route",
+        "slice": "162->237",
+        "n": 7637,
+        "mae_champion": 3.5815424088125822,
+        "mae_candidate": 3.629970012516529,
+        "ratio": 1.0135214380220063,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "239->236",
+        "n": 6667,
+        "mae_champion": 2.6786611025617697,
+        "mae_candidate": 2.6936977502945583,
+        "ratio": 1.0056134938900663,
+        "regressed": false
+      },
+      {
+        "family": "airport",
+        "slice": "from_JFK",
+        "n": 134210,
+        "mae_champion": 6.912364130448088,
+        "mae_candidate": 6.9469384125462605,
+        "ratio": 1.0050018027762566,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "239->238",
+        "n": 8558,
+        "mae_champion": 1.6969865628161185,
+        "mae_candidate": 1.705447231039047,
+        "ratio": 1.0049857013651824,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "237->141",
+        "n": 7665,
+        "mae_champion": 2.209554194793618,
+        "mae_candidate": 2.219460493471339,
+        "ratio": 1.004483392487527,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2026-04",
+    "candidate": {
+      "model_md5": "10a11f7f848ae6dbd22a11ac82dac346",
+      "dvc_lock_md5": "4f4053c18e881384e1447531086746fe"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "ac5df9da8b0851f7d46b5276cd1a2936d29ee0291c389e16e9ba46eaf7fcfc83",
+      "slices_sha256": "cacdcb37e64b7c604a68f854a8a06276b50dfaeb15dc17eef9872c42de4dfc1e"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-09-30T12:48:05+00:00"
+}
