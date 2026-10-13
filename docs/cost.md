@@ -1,6 +1,7 @@
 # Cost ledger
 
-**State 2026-09-23: ON, on the AWS Free plan.** Account 560512681455, us-east-1.
+**State 2026-10-12: ON, on the AWS Free plan.** Account 560512681455, us-east-1.
+The account also holds an unrelated project (`wildinbox-staging`, a CloudFormation stack since 2026-09-25: a stopped EC2 instance, its 40 GB gp3 volume, an S3 bucket). It is not part of this ledger, `teardown.sh` never touches it, and account-wide Cost Explorer totals include it.
 Every resource carries the tag `project=nyc-taxi-trip-duration`:
 - a budget ($5/month, alert e-mails at 40 % and 100 %);
 - the S3 bucket (DVC remote + registry backups);
@@ -23,10 +24,25 @@ Three kinds of number appear below. They are never mixed:
 |---|---|---|
 | 2026-09-23 | `freetier:GetAccountPlanState` | plan FREE, ACTIVE, **140 USD credits left**, expires 2027-03-22 |
 | 2026-09-23 | `ce:GetCostAndUsage` (month to date) | `DataUnavailableException`: Cost Explorer has no data yet (account created 2026-09-22). Not $0: *no data* |
-| 2026-09-23 | `ce:ListCostAllocationTags` for `project` | tag not yet seen by billing, so it **cannot be activated yet**. Retry with `scripts/cost_report.py --activate-tag`; until then, reports are account-wide (this account holds nothing else) |
+| 2026-09-23 | `ce:ListCostAllocationTags` for `project` | tag not yet seen by billing, so it **cannot be activated yet**. Retry with `scripts/cost_report.py --activate-tag`; until then, reports are account-wide (true on that date; since 2026-09-25 the account also holds `wildinbox-staging`, see the top) |
 | 2026-09-23 | `freetier:GetFreeTierUsage` | no usage records yet |
+| 2026-10-12 | `ce:UpdateCostAllocationTagsStatus` (`cost_report.py --activate-tag`) | `project` tag **Active**. Not retroactive: tag-filtered reports cover usage from 2026-10-12 on; earlier months are split by hand below |
+| 2026-10-12 | `freetier:GetAccountPlanState` | plan FREE, ACTIVE, **157.68 USD credits left** (more than the 140 at sign-up: Free-plan activity credits), expires 2027-03-22 |
+| 2026-10-12 | `ce:GetCostAndUsage` 2026-09 (full month, account-wide) | usage **$1.0392**, credits −$1.0392, **net $0.00**. Of that, this project is **≈ $0.06–0.16**: S3 $0.139 is shared (see split), ECR $0.0230, Lambda/CloudWatch/SNS $0.00. The other $0.88 is `wildinbox-staging`: EC2 m7i-flex.large 2.9 h $0.2756, EBS gp3 7.3 GB-mo $0.5872, public IPv4 $0.0145 |
+| 2026-10-12 | `ce:GetCostAndUsage` 2026-10-01..12 (account-wide) | usage **$1.2684**, credits −$1.2684, **net $0.00**. This project: S3 ≈ $0.084 (84 % of $0.0996), ECR $0.0291, Lambda $0, CloudWatch $0. `wildinbox-staging`: EBS $1.1398, S3 ≈ $0.016 |
 
-**Reconciliation** (issue #67): record the first month-to-date line once Cost Explorer has data, activate the tag, and on **2026-10-05** reconcile September's full month (`make cost MONTH=2026-09`) against the estimate below. Record each month's line here, with usage, credits and net.
+**Reconciliation** (issue #67), 2026-10-12. Record one line per month here, with usage, credits and net.
+
+**How S3 is split.** S3 is the one service both projects use. CloudWatch `BucketSizeBytes` on 2026-10-11: ours 11.28 GB (181 objects), wildinbox's 2.07 GB (18,194 objects), so 84 % of storage is ours. September's S3 line ($0.139) was mostly requests, not storage (1.26 GB-months ≈ $0.03): 18,851 tier-1 requests (PUT/LIST, ≈ $0.094) and 39,264 tier-2 (GET, ≈ $0.016). wildinbox's 18k-object upload accounts for most of the tier-1 requests, so our September S3 was between ≈ $0.04 and $0.139; CE cannot say exactly without the tag. October has 28 tier-1 requests so far, so storage dominates and the 84 % split holds.
+
+**September against the estimate.** The estimate is $1.20 a month after allowances: $1.00 monitoring and $0.18 storage. September's real cost was ≈ $0.06–0.16, all storage and S3 requests:
+- **Monitoring was $0.**
+  - Alarms: 3.57 alarm-months, because the alarms only existed from 2026-09-23. That is under the 10 free, so nothing was charged. October will pass the allowance: 5.10 alarm-months by the 12th, which projects to ≈ 13.5. That is ≈ $0.35, as estimated.
+  - Custom metrics: billed per metric-hour that receives data, and our log-filter metrics publish only when a line matches (no default zeros). Measured 0.20 metric-months in September and 0.13 so far in October, against the 12 the estimate charged for. **The $0.60 metric line is wrong**: the real figure is ≈ $0.
+- **Lambda**: 5,228 requests and 908 GB-s in September; 2,178 requests and 292 GB-s in October to the 12th. Both are far under the 1M-request and 400k GB-s allowances.
+- **Storage** cost what the estimate expected, but the DVC remote grew much faster than estimated (next section).
+
+**Corrected run rate** (October, full month, after allowances): S3 ≈ $0.26 + ECR ≈ $0.10 + alarms ≈ $0.35 = **≈ $0.71/month**, charged **$0** (from credits). At that rate the credits outlast the plan by far.
 
 ## Estimate at observed traffic (per month)
 
@@ -41,12 +57,12 @@ Traffic is almost entirely our own probes:
 | Lambda compute, 3008 MB | 7k × ~20 ms + 40 × 16 s ≈ 2.3k GB-s | $0.04 | 400k GB-s | $0 |
 | CloudWatch Logs ingestion + 14-day storage | ≈ 1 KB × 7k lines ≈ 7 MB (**measured 0.32 MB stored** after 2 days) | $0.004 | 5 GB | $0 |
 | CloudWatch alarms (standard) | **14** | $1.40 | 10 alarms | **$0.40** |
-| CloudWatch custom metrics | **12**: 9 from log filters, plus `E2ELatencyMs`, `ColdStartE2EMs`, `InitDurationMs` | $3.60 | 10 metrics | **$0.60** |
+| CloudWatch custom metrics | **12**: 9 from log filters, plus `E2ELatencyMs`, `ColdStartE2EMs`, `InitDurationMs` | $3.60 | 10 metrics | **$0.60** (overstated: measured ≈ 0.2 metric-months, ≈ $0; see Reconciliation) |
 | CloudWatch API (PutMetricData, alarm reads) | ≈ 1k | ≈ $0.01 | 1M requests | $0 |
-| S3 storage: DVC remote | **measured 2.74 GB, 57 objects** (793 MB on 2026-09-22); grows ≈ 0.4 GB per retrain push, and nothing garbage-collects it | $0.063 | none on this plan | $0.063 |
+| S3 storage: DVC remote | **measured 11.28 GB, 181 objects on 2026-10-11** (2.74 GB on 2026-09-23, 793 MB on 2026-09-22): retrain #112 carried twelve new months at once, and nothing garbage-collects old pipeline outputs | $0.26 | none on this plan | $0.26 |
 | S3 storage: registry backups | **measured 22.6 MB**, one per `make registry-backup`, kept until deleted | $0.0005 | none | $0.0005 |
 | S3 requests (dvc pull/push, backups) | a few thousand | < $0.01 | none | < $0.01 |
-| ECR storage | **measured 7 images ≈ 1.23 GB** (5 tagged + 1 untagged 201.5 MB not yet expired); the lifecycle rule keeps 5 | $0.12 | none on this plan | $0.12 |
+| ECR storage | **measured 5 images × 206 MB ≈ 1.03 GB on 2026-10-12** (7 images, 1.23 GB on 2026-09-23); the lifecycle rule keeps 5 | $0.10 | none on this plan | $0.10 |
 | SNS e-mail | ≤ 100 notifications | $0 | 1,000 e-mails | $0 |
 | Budgets | 1 budget, no actions | $0 | first 2 free | $0 |
 | Data transfer out | ≈ 0 (probes return a few KB) | $0 | 100 GB | $0 |
@@ -54,7 +70,7 @@ Traffic is almost entirely our own probes:
 | **total** | | **≈ $5.24** | | **≈ $1.20**, of which $1.00 is monitoring (alarms + metrics) and $0.18 storage |
 | **charged on the Free plan** | | | | **$0** (≈ $1.20 a month drawn from the $140 credits) |
 
-Storage is the part that grows: the DVC remote by ≈ 1.6 GB a month at the weekly retrain (≈ +$0.04 a month each month; about 12 GB and $0.28 a month by 2027-03). Everything else is flat.
+Storage is the part that grows. The 2026-09-23 forecast was ≈ 12 GB by 2027-03; the remote passed 11 GB in October, because the catch-up retrain pushed a year of data at once. From here each new TLC month (the weekly check trains only when one appears) adds one raw month (≈ 0.06 GB) plus its pipeline outputs (≈ 0.4 GB), so ≈ 14 GB and ≈ $0.32 a month by 2027-03. `dvc gc --all-commits` keeps whatever any commit references, which is nearly all of it; a narrower `gc` would break reproducing old commits, so it stays off. Everything else is flat.
 
 ## What limits spending, and what does not
 

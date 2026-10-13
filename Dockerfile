@@ -82,7 +82,7 @@ COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 # is what tells us when this list needs a new entry.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
-       libssl3t64 openssl openssl-provider-legacy \
+       libssl3t64 openssl openssl-provider-legacy libpcre2-8-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --uid 10001 --create-home app
