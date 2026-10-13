@@ -1,0 +1,118 @@
+{
+  "month": "2026-06",
+  "verdict": "fail",
+  "reasons": [
+    "challenger MAE 3.9629 is only 0.90% below champion prospective on 2026-06 3.9988; the minimum worth a release is 1.0%",
+    "improvement +0.90% is below the 1.0% minimum worth a release",
+    "improvement not distinguishable from zero: 95% day-block interval [-0.39%, +1.90%] over 30 days"
+  ],
+  "candidate": {
+    "mae_test_model": 3.9628709744511506,
+    "mae_test_fallback": 4.292354446952195,
+    "train_months": [
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04"
+    ],
+    "git_sha": "ecbab9ddfb634d6ee5b074f847795e6a008adfba",
+    "model_md5": "14e0062b7fa15a82786ad0b2c67c9e11"
+  },
+  "champion": {
+    "version": 1,
+    "mae_at_promotion": 4.688721,
+    "promotion_test_month": "2024-12",
+    "mae_prospective_on_month": 3.998827349282148
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.008991729747335198,
+      "lower": -0.0038506527412027745,
+      "upper": 0.018959824836079088,
+      "days": 30
+    },
+    "slices_checked": 54,
+    "slices_regressed": 0,
+    "worst_slices": [
+      {
+        "family": "period",
+        "slice": "weekend_or_holiday_midday",
+        "n": 330191,
+        "mae_champion": 4.176208067068584,
+        "mae_candidate": 4.264179534637268,
+        "ratio": 1.0210649149074686,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "239->142",
+        "n": 8243,
+        "mae_champion": 2.018352437992008,
+        "mae_candidate": 2.0541059448940304,
+        "ratio": 1.017714204035442,
+        "regressed": false
+      },
+      {
+        "family": "route",
+        "slice": "237->142",
+        "n": 6559,
+        "mae_champion": 2.9004309707047007,
+        "mae_candidate": 2.9312423850816978,
+        "ratio": 1.0106230469499886,
+        "regressed": false
+      },
+      {
+        "family": "airport",
+        "slice": "from_JFK",
+        "n": 134027,
+        "mae_champion": 6.822845312154536,
+        "mae_candidate": 6.887305498000057,
+        "ratio": 1.0094476985621657,
+        "regressed": false
+      },
+      {
+        "family": "period",
+        "slice": "weekend_or_holiday_pm_peak",
+        "n": 257552,
+        "mae_champion": 4.3904423174756815,
+        "mae_candidate": 4.4208421679169225,
+        "ratio": 1.0069240974469105,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2026-06",
+    "candidate": {
+      "model_md5": "14e0062b7fa15a82786ad0b2c67c9e11",
+      "dvc_lock_md5": "be6a6ce7d3ff069c70df1306f1f2d2ad"
+    },
+    "champion": {
+      "version": 1,
+      "model_md5": "2c521291dc8cef52dcca29988bb00699",
+      "prospective_sha256": "52532def125283be72c898b1da56c10176b601256a5e908408bd80a4984e9228",
+      "slices_sha256": "32790e194e9e2835ecaf2d98d9c1248ef2016a881dc25299287ff7de30371920"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-10-12T18:51:55+00:00"
+}
