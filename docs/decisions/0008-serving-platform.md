@@ -327,3 +327,22 @@ the lazily fetched image layers stretch that past the 10 s window.
 answer of roughly one init (~6–10 s), not two. `deploy_check --cold` on the
 next deploy records the real number below; if init still times out, option 2
 is next.
+
+**Result, 2026-10-13** (deploy run 38349471627, v5, Lambda version 7,
+`deploy_check --cold` on a provably fresh environment: 0 invokes before):
+- `INIT_REPORT … Status: success`, init 9,821.6 ms. That is the adapter's
+  9.8 s readiness window running out and the adapter reporting init complete
+  itself, not the app finishing just in time. Init can no longer time out,
+  and the first request is no longer served by a second, restarted init.
+- First answer 13,791 ms end to end, down from ~16 s. The app was not ready
+  within the window, so the first invoke waited ~4 s more for the same
+  process. That is slower than the ~6–10 s expected above.
+- Every alarm stayed OK through the deploy (no `InitFailures`, no
+  `ColdStartE2E`); warm requests then answered in ~140–170 ms.
+
+The problem this amendment set out to fix is fixed: no killed init and no
+alarm on every cold start. The remaining cost is the cold first answer
+(~14 s, once per idle environment), which ADR-0011's `ColdStartE2E` alarm
+bounds. Option 2 (load in the background) or 3 (slimmer image) is the next
+lever if that ever matters; at the observed traffic (our own probes) it does
+not.
