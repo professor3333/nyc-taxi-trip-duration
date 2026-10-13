@@ -1,21 +1,27 @@
 {
-  "dvc_lock_md5": "f43aca65db5b270f2b345f323bc13a39",
-  "fallback_md5": "16cc9d09ae9eab8dc0e385036719e405",
+  "action": "promote",
+  "dvc_lock_md5": "843b3e5449f77e6135a98c8369705409",
+  "fallback_md5": "6369a6ea0cbab95b59778da595e935a2",
   "fixture_platform": "Darwin-arm64",
-  "fixture_sha256": "32b207e82d48c57f6305c98ce0f1bc8204a24db5ddf506de40df4ed4d98a4918",
-  "git_sha": "49fb1c0dee239a8f55462678fc5f1618497ffccb",
-  "mae_test_fallback": 5.111258,
-  "mae_test_model": 4.688721,
-  "model_md5": "2c521291dc8cef52dcca29988bb00699",
+  "fixture_sha256": "2ec4e1a3efda2227c4a5ad49c95c2af4af6c9b077495951eaa6fafeb02097265",
+  "git_sha": "2d0be5fc9309c3318e8abd0a357a37694bebaad0",
+  "mae_test_fallback": 4.755226,
+  "mae_test_model": 4.316139,
+  "model_md5": "0d8029fb8576fca46afa048ec8e6ae47",
   "model_name": "nyc-taxi-trip-duration",
-  "previous_version": 3,
-  "promoted_at": "2026-09-23T17:09:54+00:00",
-  "reason": "runbook verification: recovery path (rollback) exactly as written",
+  "previous_version": 1,
+  "promoted_at": "2026-10-13T04:26:15+00:00",
+  "reason": "2026-05 candidate, gate PASS +3.07% vs v1",
   "reference_md5": "79c1bb833dae873054bef4867a70914e",
-  "run_id": "502fe6e4792644b1a5b141b4c163cf9f",
-  "test_month": "2024-12",
+  "run_id": "f86c7d56820b4dc9b8f77ed6e29d093b",
+  "test_month": "2026-05",
   "train_months": [
-    "2024-10"
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01",
+    "2026-02",
+    "2026-03"
   ],
-  "version": 1
+  "version": 5
 }
