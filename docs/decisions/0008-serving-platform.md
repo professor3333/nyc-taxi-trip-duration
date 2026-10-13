@@ -342,7 +342,7 @@ is next.
 
 The problem this amendment set out to fix is fixed: no killed init and no
 alarm on every cold start. The remaining cost is the cold first answer
-(~14 s, once per idle environment), which ADR-0011's `ColdStartE2E` alarm
-bounds. Option 2 (load in the background) or 3 (slimmer image) is the next
+(~14 s, once per idle environment), which the `ColdStartE2E` alarm
+(`deploy/aws/monitoring.sh`) bounds. Option 2 (load in the background) or 3 (slimmer image) is the next
 lever if that ever matters; at the observed traffic (our own probes) it does
 not.
