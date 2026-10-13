@@ -17,3 +17,4 @@ One line per alias change, appended by `scripts/promote.py`.
 | 2026-09-22T16:10:19+00:00 | rollback | 3 | 1 | 2024-12 | 4.6887 | 5.1113 | 2024-10 | f43aca65 | 49fb1c0d | milestone demo: select the previous version and verify its predictions are restored |
 | 2026-09-22T16:24:49+00:00 | promote | 1 | 3 | 2025-01 | 3.7898 | 3.9946 | 2024-10,2024-11 | 19c1facf | f6b2f155 | restore the better model after the predictions-restored demonstration (3.790 vs 4.689) |
 | 2026-09-23T17:09:54+00:00 | rollback | 3 | 1 | 2024-12 | 4.6887 | 5.1113 | 2024-10 | f43aca65 | 49fb1c0d | runbook verification: recovery path (rollback) exactly as written |
+| 2026-10-13T04:26:15+00:00 | promote | 1 | 5 | 2026-05 | 4.3161 | 4.7552 | 2025-10,2025-11,2025-12,2026-01,2026-02,2026-03 | 843b3e54 | 2d0be5fc | 2026-05 candidate, gate PASS +3.07% vs v1 |
