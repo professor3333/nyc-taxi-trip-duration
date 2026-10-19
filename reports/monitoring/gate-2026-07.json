@@ -1,0 +1,119 @@
+{
+  "month": "2026-07",
+  "verdict": "fail",
+  "reasons": [
+    "challenger MAE 3.7502 is only 0.39% below champion prospective on 2026-07 3.7650; the minimum worth a release is 1.0%",
+    "improvement +0.39% is below the 1.0% minimum worth a release",
+    "slice borough_pair=Bronx->Manhattan (n=6780) worse by +4.4%: 8.457 -> 8.825 (limit +3.0%)",
+    "slice airport=to_JFK (n=23622) worse by +3.6%: 7.632 -> 7.903 (limit +3.0%)"
+  ],
+  "candidate": {
+    "mae_test_model": 3.750191422911494,
+    "mae_test_fallback": 4.08555254236412,
+    "train_months": [
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05"
+    ],
+    "git_sha": "ed32ae701d3c64e5bf3d6cd2b35e72e40afdd23a",
+    "model_md5": "2ea3a230962426b87a7d6f01fac2a649"
+  },
+  "champion": {
+    "version": 5,
+    "mae_at_promotion": 4.316139,
+    "promotion_test_month": "2026-05",
+    "mae_prospective_on_month": 3.7650042243742488
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.003934338603622245,
+      "lower": 0.002176560072342962,
+      "upper": 0.006007323332696271,
+      "days": 31
+    },
+    "slices_checked": 54,
+    "slices_regressed": 2,
+    "worst_slices": [
+      {
+        "family": "borough_pair",
+        "slice": "Bronx->Manhattan",
+        "n": 6780,
+        "mae_champion": 8.457115541160027,
+        "mae_candidate": 8.825421856987603,
+        "ratio": 1.0435498739534848,
+        "regressed": true
+      },
+      {
+        "family": "airport",
+        "slice": "to_JFK",
+        "n": 23622,
+        "mae_champion": 7.631556016908319,
+        "mae_candidate": 7.902954474890354,
+        "ratio": 1.0355626634176216,
+        "regressed": true
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Brooklyn->Manhattan",
+        "n": 47930,
+        "mae_champion": 4.969847933953496,
+        "mae_candidate": 5.076727184662763,
+        "ratio": 1.0215055374187767,
+        "regressed": false
+      },
+      {
+        "family": "airport",
+        "slice": "to_EWR",
+        "n": 5825,
+        "mae_champion": 6.665015162604533,
+        "mae_candidate": 6.76037305815226,
+        "ratio": 1.0143072285990815,
+        "regressed": false
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Manhattan->EWR",
+        "n": 5697,
+        "mae_champion": 6.598539080882139,
+        "mae_candidate": 6.689130821151513,
+        "ratio": 1.0137290601993771,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2026-07",
+    "candidate": {
+      "model_md5": "2ea3a230962426b87a7d6f01fac2a649",
+      "dvc_lock_md5": "7b48bddb0029fd840714e4391a5180b6"
+    },
+    "champion": {
+      "version": 5,
+      "model_md5": "0d8029fb8576fca46afa048ec8e6ae47",
+      "prospective_sha256": "593ae2776a0c131a134677825f0aa11ba1cf84c99002fc0439b249ebbf9964bf",
+      "slices_sha256": "30ba95c7ff082f62cabc7bb3ce6ebec0dd950a54c8c8782b3ac9ab25f7ed4e3d"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-10-19T16:36:44+00:00"
+}
