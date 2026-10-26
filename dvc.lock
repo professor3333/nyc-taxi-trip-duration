@@ -17,9 +17,9 @@ stages:
       size: 937
     - path: data/raw/yellow
       hash: md5
-      md5: 039caad7333f5e73b31a88391e0a9296.dir
-      size: 1407227208
-      nfiles: 43
+      md5: 07317306576d48409e6df8cd7d6d51e7.dir
+      size: 1527956434
+      nfiles: 47
     - path: src/tripduration/config.py
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
@@ -56,14 +56,14 @@ stages:
     outs:
     - path: data/validated
       hash: md5
-      md5: 3771627cb1154f8dfe57b8905e53dc02.dir
-      size: 1755323863
-      nfiles: 21
+      md5: 0faa4d995d5e2b33cf3ae22973198c8d.dir
+      size: 1901278296
+      nfiles: 23
     - path: reports/validation
       hash: md5
-      md5: d65f46a0823f20d4f6d53376e91b4dd2.dir
-      size: 39474
-      nfiles: 21
+      md5: 375ceb62efb49da8845e5df2fb089ba7.dir
+      size: 43249
+      nfiles: 23
   prepare:
     cmd: uv run --locked python -m tripduration.prepare
     deps:
@@ -85,14 +85,14 @@ stages:
       size: 15670
     - path: data/validated
       hash: md5
-      md5: 3771627cb1154f8dfe57b8905e53dc02.dir
-      size: 1755323863
-      nfiles: 21
+      md5: 0faa4d995d5e2b33cf3ae22973198c8d.dir
+      size: 1901278296
+      nfiles: 23
     - path: reports/quality
       hash: md5
-      md5: 53024f71a74d837c23b917106bc5751c.dir
-      size: 94777
-      nfiles: 22
+      md5: 685d2acec2c5e8d29989d932708f798f.dir
+      size: 103827
+      nfiles: 24
     - path: src/tripduration/config.py
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
@@ -133,12 +133,12 @@ stages:
     outs:
     - path: data/processed
       hash: md5
-      md5: a2f1ea65ce197bd20f32bfa3fdc6cacd.dir
-      size: 508342040
+      md5: 6f27bd77221713409dfbd027a398f2cc.dir
+      size: 483157553
       nfiles: 3
     - path: reports/prepare.json
       hash: md5
-      md5: b8872bbe672d57caa692281dfa0b9091
+      md5: fb74fcf87281bb0df9a3b8bdc0e08e19
       size: 751
   train:
     cmd: uv run --locked python -m tripduration.train
@@ -157,19 +157,19 @@ stages:
       size: 937
     - path: data/processed/train.parquet
       hash: md5
-      md5: a8a2c2dd1b95b87145b6fbe74501823b
-      size: 379423828
+      md5: 398e6e14e25f39ba299b649ba6210455
+      size: 372816659
     - path: data/processed/val.parquet
       hash: md5
-      md5: aad51a58e83bd0463f0beb5eccdf97e2
-      size: 66588726
+      md5: 00f7f39beb8e314968a6c101fa41da09
+      size: 56819102
     - path: data/reference/zone_centroids.csv
       hash: md5
       md5: 79c1bb833dae873054bef4867a70914e
       size: 15670
     - path: reports/prepare.json
       hash: md5
-      md5: b8872bbe672d57caa692281dfa0b9091
+      md5: fb74fcf87281bb0df9a3b8bdc0e08e19
       size: 751
     - path: src/tripduration/config.py
       hash: md5
@@ -218,16 +218,16 @@ stages:
     outs:
     - path: models/fallback_table.parquet
       hash: md5
-      md5: 7418c89b89155c61944cc3c872778cc4
-      size: 710337
+      md5: 3270be58f75fbeb6e6ac8614df4896bd
+      size: 686291
     - path: models/model.pkl
       hash: md5
-      md5: 14e0062b7fa15a82786ad0b2c67c9e11
-      size: 2206700
+      md5: 91ab4c90b8c9324b34157faef52e2bbb
+      size: 2207396
     - path: models/model_meta.json
       hash: md5
-      md5: e640a7703def5d35955e2982b00d0e4b
-      size: 2264
+      md5: 86a449d6f946ab97a36f3b9a4d687b5a
+      size: 2266
   evaluate:
     cmd: uv run --locked python -m tripduration.evaluate
     deps:
@@ -245,28 +245,28 @@ stages:
       size: 937
     - path: data/processed/test.parquet
       hash: md5
-      md5: 78d0b943c2d2b49865aa4ede1d1c1278
-      size: 62329486
+      md5: 2ccc8858e4c68433f978abcd6cc70390
+      size: 53521792
     - path: data/processed/val.parquet
       hash: md5
-      md5: aad51a58e83bd0463f0beb5eccdf97e2
-      size: 66588726
+      md5: 00f7f39beb8e314968a6c101fa41da09
+      size: 56819102
     - path: data/reference/zone_centroids.csv
       hash: md5
       md5: 79c1bb833dae873054bef4867a70914e
       size: 15670
     - path: models/fallback_table.parquet
       hash: md5
-      md5: 7418c89b89155c61944cc3c872778cc4
-      size: 710337
+      md5: 3270be58f75fbeb6e6ac8614df4896bd
+      size: 686291
     - path: models/model.pkl
       hash: md5
-      md5: 14e0062b7fa15a82786ad0b2c67c9e11
-      size: 2206700
+      md5: 91ab4c90b8c9324b34157faef52e2bbb
+      size: 2207396
     - path: models/model_meta.json
       hash: md5
-      md5: e640a7703def5d35955e2982b00d0e4b
-      size: 2264
+      md5: 86a449d6f946ab97a36f3b9a4d687b5a
+      size: 2266
     - path: src/tripduration/config.py
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
@@ -301,12 +301,12 @@ stages:
     outs:
     - path: metrics/eval.json
       hash: md5
-      md5: 530ddfb3403fcbe2f730cd4ae0d869a9
-      size: 1730
+      md5: 708865aacb75abd38e4e8e8f59051a06
+      size: 1732
     - path: reports/eval
       hash: md5
-      md5: 06f5e4a7fb88f8c73ef4c2d39284f3d7.dir
-      size: 41644
+      md5: 9359babf278b61dc5484dff3495cdfcf.dir
+      size: 41993
       nfiles: 9
   quality:
     cmd: uv run --locked python -m tripduration.quality
@@ -325,14 +325,14 @@ stages:
       size: 937
     - path: data/raw/yellow
       hash: md5
-      md5: 039caad7333f5e73b31a88391e0a9296.dir
-      size: 1407227208
-      nfiles: 43
+      md5: 07317306576d48409e6df8cd7d6d51e7.dir
+      size: 1527956434
+      nfiles: 47
     - path: data/validated
       hash: md5
-      md5: 3771627cb1154f8dfe57b8905e53dc02.dir
-      size: 1755323863
-      nfiles: 21
+      md5: 0faa4d995d5e2b33cf3ae22973198c8d.dir
+      size: 1901278296
+      nfiles: 23
     - path: src/tripduration/config.py
       hash: md5
       md5: 9a65af113de3016d1b6e188e49c8ae30
@@ -377,6 +377,6 @@ stages:
     outs:
     - path: reports/quality
       hash: md5
-      md5: 53024f71a74d837c23b917106bc5751c.dir
-      size: 94777
-      nfiles: 22
+      md5: 685d2acec2c5e8d29989d932708f798f.dir
+      size: 103827
+      nfiles: 24

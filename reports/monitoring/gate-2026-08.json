@@ -1,0 +1,114 @@
+{
+  "month": "2026-08",
+  "verdict": "pass",
+  "reasons": [],
+  "candidate": {
+    "mae_test_model": 3.6621566040013054,
+    "mae_test_fallback": 3.924619774843323,
+    "train_months": [
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06"
+    ],
+    "git_sha": "ed32ae701d3c64e5bf3d6cd2b35e72e40afdd23a",
+    "model_md5": "91ab4c90b8c9324b34157faef52e2bbb"
+  },
+  "champion": {
+    "version": 5,
+    "mae_at_promotion": 4.316139,
+    "promotion_test_month": "2026-05",
+    "mae_prospective_on_month": 3.7109422527764098
+  },
+  "safeguards": {
+    "policy": {
+      "min_relative_improvement": 0.01,
+      "confidence": 0.95,
+      "bootstrap_resamples": 2000,
+      "slice_min_n": 2000,
+      "slice_max_regression": 0.03,
+      "gated_families": [
+        "period",
+        "airport",
+        "borough_pair",
+        "route"
+      ],
+      "seed": 42
+    },
+    "families_empty": [],
+    "improvement": {
+      "point": 0.013146431674759707,
+      "lower": 0.010358138878899751,
+      "upper": 0.01635797750212478,
+      "days": 31
+    },
+    "slices_checked": 54,
+    "slices_regressed": 0,
+    "worst_slices": [
+      {
+        "family": "borough_pair",
+        "slice": "Bronx->Manhattan",
+        "n": 7072,
+        "mae_champion": 8.960890675284244,
+        "mae_candidate": 9.221432857766915,
+        "ratio": 1.0290754783116922,
+        "regressed": false
+      },
+      {
+        "family": "airport",
+        "slice": "from_LGA",
+        "n": 82764,
+        "mae_champion": 5.246930627138307,
+        "mae_candidate": 5.296619408885834,
+        "ratio": 1.0094700664595269,
+        "regressed": false
+      },
+      {
+        "family": "period",
+        "slice": "weekday_overnight",
+        "n": 125206,
+        "mae_champion": 2.8717531263917597,
+        "mae_candidate": 2.89442720895123,
+        "ratio": 1.0078955542351786,
+        "regressed": false
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Brooklyn->Manhattan",
+        "n": 50721,
+        "mae_champion": 4.9289891377153205,
+        "mae_candidate": 4.959737297885222,
+        "ratio": 1.0062382284299685,
+        "regressed": false
+      },
+      {
+        "family": "borough_pair",
+        "slice": "Manhattan->Bronx",
+        "n": 22471,
+        "mae_champion": 5.901115923953606,
+        "mae_candidate": 5.917988873937165,
+        "ratio": 1.002859281227652,
+        "regressed": false
+      }
+    ]
+  },
+  "binding": {
+    "schema": 1,
+    "month": "2026-08",
+    "candidate": {
+      "model_md5": "91ab4c90b8c9324b34157faef52e2bbb",
+      "dvc_lock_md5": "15dabcd55bd7ff0ab28c9991f9ac3690"
+    },
+    "champion": {
+      "version": 5,
+      "model_md5": "0d8029fb8576fca46afa048ec8e6ae47",
+      "prospective_sha256": "6273299a3350890c01de2a1ee216f50eb664812afeae83117ac6d53f10ec7741",
+      "slices_sha256": "271892b42c879d9c0076c164fe2f4f8e1a8f1ac62245c9474e0f51cffcc42d4e"
+    },
+    "reference_md5": "79c1bb833dae873054bef4867a70914e",
+    "policy_sha256": "0d50e2dd09bd0a11f42a0c028f9d975a79fd3ed46118de5fc5c86af34d30c63d"
+  },
+  "decided_at": "2026-10-26T16:06:45+00:00"
+}

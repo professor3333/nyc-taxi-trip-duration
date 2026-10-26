@@ -21,7 +21,9 @@
     "2026-03",
     "2026-04",
     "2026-05",
-    "2026-06"
+    "2026-06",
+    "2026-07",
+    "2026-08"
   ],
   "passed": true,
   "per_month": {
@@ -213,8 +215,26 @@
       "removed_over_180_min": 1107,
       "rows_raw": 3837248,
       "rows_valid": 3709833
+    },
+    "2026-07": {
+      "p50_min": 14.333,
+      "p99_min": 62.75,
+      "reject_rate": 0.050161,
+      "removed_at_or_below_0_min": 42316,
+      "removed_over_180_min": 1002,
+      "rows_raw": 3530109,
+      "rows_valid": 3353034
+    },
+    "2026-08": {
+      "p50_min": 14.35,
+      "p99_min": 61.817,
+      "reject_rate": 0.060018,
+      "removed_at_or_below_0_min": 43185,
+      "removed_over_180_min": 873,
+      "rows_raw": 3336716,
+      "rows_valid": 3136453
     }
   },
-  "rows_raw_total": 82707643,
-  "rows_valid_total": 79358559
+  "rows_raw_total": 89574468,
+  "rows_valid_total": 85848046
 }
